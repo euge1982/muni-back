@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "meetings" ADD COLUMN     "allowedRadius" INTEGER NOT NULL DEFAULT 100,
+ADD COLUMN     "latitude" DECIMAL(65,30) NOT NULL DEFAULT 0,
+ADD COLUMN     "longitude" DECIMAL(65,30) NOT NULL DEFAULT 0;

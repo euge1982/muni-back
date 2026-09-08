@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+enum AttendanceSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  REJECTED
+}
+
+model AttendanceSession {
+  id            Int                      @id @default(autoincrement())
+  meetingId     Int
+  openedBy      Int
+  startTime     DateTime
+  endTime       DateTime
+  status        AttendanceSessionStatus
+
+  attendances   Attendance[]
+
+  @@map("attendance_sessions")
+}
+
+model Attendance {
+  id             Int              @id @default(autoincrement())
+  sessionId      Int
+  participantId  Int
+  latitude       Decimal
+  longitude      Decimal
+  checkInTime    DateTime
+  status         AttendanceStatus
+
+  session        AttendanceSession @relation(fields: [sessionId], references: [id])
+
+  @@unique([sessionId, participantId])
+
+  @@map("attendances")
+}

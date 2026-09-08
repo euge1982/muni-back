@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ActivityStatus {
+  ACTIVE
+  FINISHED
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  SUSPENDED
+  FINISHED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  WITHDRAWN
+  DROPPED
+}
+
+enum MaterialType {
+  PDF
+  IMAGE
+  LINK
+}
+
+model Activity {
+  id              Int      @id @default(autoincrement())
+  name            String
+  description     String?
+  status          ActivityStatus @default(ACTIVE)
+  capacity        Int
+  enrollmentStart DateTime
+  enrollmentEnd   DateTime
+  responsibleId   Int
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  meetings        Meeting[]
+  enrollments     Enrollment[]
+  materials       Material[]
+
+  @@map("activities")
+}
+
+model Meeting {
+  id          Int           @id @default(autoincrement())
+  activityId  Int
+  dateTime    DateTime
+  location    String
+  latitude    Decimal       @default(0)
+  longitude   Decimal       @default(0)
+  allowedRadius Int         @default(100)
+  status      MeetingStatus @default(SCHEDULED)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  activity    Activity      @relation(fields: [activityId], references: [id])
+  //attendances Attendance[]
+
+  @@map("meetings")
+}
+
+model Enrollment {
+  id            Int              @id @default(autoincrement())
+  activityId    Int
+  participantId Int
+  status        EnrollmentStatus @default(ACTIVE)
+  absenceCount  Int              @default(0)
+  enrolledAt    DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  activity      Activity         @relation(fields: [activityId], references: [id])
+
+  @@unique([activityId, participantId])
+  @@map("enrollments")
+}
+
+model Material {
+  id          Int          @id @default(autoincrement())
+  activityId  Int
+  name        String
+  type        MaterialType
+  url         String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  activity    Activity     @relation(fields: [activityId], references: [id])
+
+  @@map("materials")
+}

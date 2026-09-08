@@ -1,0 +1,18 @@
+# Dependencias
+node_modules/
+
+# Compilados
+dist/
+
+# Variables de entorno
+
+
+# Logs
+*.log
+
+# Prisma
+*.db
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
