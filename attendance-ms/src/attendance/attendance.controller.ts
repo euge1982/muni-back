@@ -7,7 +7,7 @@ import { AttendanceService } from './attendance.service';
 export class AttendanceController {
   constructor(
     private readonly attendanceService: AttendanceService,
-  ) {}
+  ) { }
 
   @MessagePattern('open-attendance')
   openAttendance(data: {
@@ -47,4 +47,10 @@ export class AttendanceController {
   processAbsences(data: { sessionId: number }) {
     return this.attendanceService.processAbsences(data.sessionId);
   }
+
+  @MessagePattern('find-attendance-session')
+  findSession(data: { sessionId: number }) {
+    return this.attendanceService.findSession(data.sessionId);
+  }
+
 }

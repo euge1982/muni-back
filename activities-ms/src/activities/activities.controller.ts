@@ -9,7 +9,7 @@ import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 export class ActivitiesController {
   constructor(
     private readonly activitiesService: ActivitiesService,
-  ) {}
+  ) { }
 
   @MessagePattern('find-activities')
   findAll() {
@@ -73,6 +73,13 @@ export class ActivitiesController {
   @MessagePattern('find-active-enrollments')
   findActiveEnrollments(data: { activityId: number }) {
     return this.activitiesService.findActiveEnrollments(data.activityId);
+  }
+
+  @MessagePattern('find-enrollments-by-participant')
+  findEnrollmentsByParticipant(data: { participantId: number }) {
+    return this.activitiesService.findEnrollmentsByParticipant(
+      data.participantId,
+    );
   }
 
   @MessagePattern('reactivate-enrollment')

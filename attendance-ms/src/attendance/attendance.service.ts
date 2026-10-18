@@ -15,7 +15,7 @@ export class AttendanceService {
     @Inject('ACTIVITIES_SERVICE')
     private readonly activitiesService: ClientProxy,
 
-  ) {}
+  ) { }
 
   async openAttendance(data: {
     meetingId: number;
@@ -54,6 +54,12 @@ export class AttendanceService {
         endTime,
         status: 'OPEN',
       },
+    });
+  }
+
+  async findSession(sessionId: number) {
+    return this.prisma.attendanceSession.findUnique({
+      where: { id: sessionId },
     });
   }
 
@@ -278,30 +284,30 @@ export class AttendanceService {
       });
 
       // Si no tiene asistencia, faltó
-     if (!attendance) {
-      const updatedEnrollment = await firstValueFrom(
-        this.activitiesService.send('register-absence', {
-          enrollmentId: enrollment.id,
-        }),
-      );
+      if (!attendance) {
+        const updatedEnrollment = await firstValueFrom(
+          this.activitiesService.send('register-absence', {
+            enrollmentId: enrollment.id,
+          }),
+        );
 
-      await this.prisma.attendance.create({
-        data: {
-          sessionId,
-          participantId: enrollment.participantId,
-          latitude: 0,
-          longitude: 0,
-          checkInTime: session.endTime,
-          status: 'ABSENT',
-        },
-      });
+        await this.prisma.attendance.create({
+          data: {
+            sessionId,
+            participantId: enrollment.participantId,
+            latitude: 0,
+            longitude: 0,
+            checkInTime: session.endTime,
+            status: 'ABSENT',
+          },
+        });
 
-      processed++;
+        processed++;
 
-      if (updatedEnrollment.status === 'DROPPED') {
-        dropped++;
+        if (updatedEnrollment.status === 'DROPPED') {
+          dropped++;
+        }
       }
-    }
     }
 
     return {

@@ -14,7 +14,7 @@ export class ActivitiesService {
 
     @Inject('USERS_SERVICE')
     private readonly usersService: ClientProxy,
-  ) {}
+  ) { }
 
   async findAll() {
     return this.prisma.activity.findMany({
@@ -93,140 +93,144 @@ export class ActivitiesService {
       },
     });
   }
-  
+
   async createEnrollment(createEnrollmentDto: CreateEnrollmentDto) {
-  const activity = await this.prisma.activity.findUnique({
-    where: { id: createEnrollmentDto.activityId },
-  });
-
-  if (!activity) {
-    throw new RpcException({
-      statusCode: 404,
-      message: 'La actividad indicada no existe',
+    const activity = await this.prisma.activity.findUnique({
+      where: { id: createEnrollmentDto.activityId },
     });
-  }
 
-  const participant = await firstValueFrom(
-    this.usersService.send('find-user', {
-      userId: createEnrollmentDto.participantId,
-    }),
-  );
-
-  if (!participant) {
-    throw new RpcException({
-      statusCode: 404,
-      message: 'El participante indicado no existe',
-    });
-  }
-
-  if (!participant.roles.includes('PARTICIPANTE')) {
-    throw new RpcException({
-      statusCode: 400,
-      message: 'El usuario indicado no tiene el rol PARTICIPANTE',
-    });
-  }
-
-  if (activity.status !== 'ACTIVE') {
-    throw new RpcException({
-      statusCode: 400,
-      message: 'La actividad no está activa',
-    });
-  }
-
-  const now = new Date();
-
-  if (now < activity.enrollmentStart || now > activity.enrollmentEnd) {
-    throw new RpcException({
-      statusCode: 400,
-      message: 'La inscripción está fuera del período permitido',
-    });
-  }
-
-  const existingEnrollment = await this.prisma.enrollment.findUnique({
-    where: {
-      activityId_participantId: {
-        activityId: createEnrollmentDto.activityId,
-        participantId: createEnrollmentDto.participantId,
-      },
-    },
-  });
-
-  if (existingEnrollment) {
-    if (existingEnrollment.status === 'WITHDRAWN') {
-      return this.prisma.enrollment.update({
-        where: { id: existingEnrollment.id },
-        data: {
-          status: 'ACTIVE',
-          absenceCount: 0,
-        },
+    if (!activity) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La actividad indicada no existe',
       });
     }
 
-    throw new RpcException({
-      statusCode: 400,
-      message: 'El participante ya está inscripto en esta actividad',
-    });
-  }
+    const participant = await firstValueFrom(
+      this.usersService.send('find-user', {
+        userId: createEnrollmentDto.participantId,
+      }),
+    );
 
-  const activeEnrollments = await this.prisma.enrollment.count({
-    where: {
-      activityId: createEnrollmentDto.activityId,
-      status: 'ACTIVE',
-    },
-  });
+    if (!participant) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'El participante indicado no existe',
+      });
+    }
 
-  if (activeEnrollments >= activity.capacity) {
-    throw new RpcException({
-      statusCode: 400,
-      message: 'La actividad no tiene cupos disponibles',
-    });
-  }
+    if (!participant.roles.includes('PARTICIPANTE')) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El usuario indicado no tiene el rol PARTICIPANTE',
+      });
+    }
 
-  return this.prisma.enrollment.create({
-    data: {
-      activityId: createEnrollmentDto.activityId,
-      participantId: createEnrollmentDto.participantId,
-    },
-  });
-}
+    if (activity.status !== 'ACTIVE') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La actividad no está activa',
+      });
+    }
 
-async withdrawEnrollment(activityId: number, participantId: number) {
-  const enrollment = await this.prisma.enrollment.findUnique({
-    where: {
-      activityId_participantId: {
-        activityId,
-        participantId,
+    const now = new Date();
+
+    if (now < activity.enrollmentStart || now > activity.enrollmentEnd) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La inscripción está fuera del período permitido',
+      });
+    }
+
+    const existingEnrollment = await this.prisma.enrollment.findUnique({
+      where: {
+        activityId_participantId: {
+          activityId: createEnrollmentDto.activityId,
+          participantId: createEnrollmentDto.participantId,
+        },
       },
-    },
-  });
+    });
 
-  if (!enrollment) {
-    throw new RpcException({
-      statusCode: 404,
-      message: 'La inscripción no existe',
+    if (existingEnrollment) {
+      if (existingEnrollment.status === 'WITHDRAWN') {
+        return this.prisma.enrollment.update({
+          where: { id: existingEnrollment.id },
+          data: {
+            status: 'ACTIVE',
+            absenceCount: 0,
+          },
+        });
+      }
+
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El participante ya está inscripto en esta actividad',
+      });
+    }
+
+    const activeEnrollments = await this.prisma.enrollment.count({
+      where: {
+        activityId: createEnrollmentDto.activityId,
+        status: 'ACTIVE',
+      },
+    });
+
+    if (activeEnrollments >= activity.capacity) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La actividad no tiene cupos disponibles',
+      });
+    }
+
+    return this.prisma.enrollment.create({
+      data: {
+        activityId: createEnrollmentDto.activityId,
+        participantId: createEnrollmentDto.participantId,
+      },
     });
   }
 
-  if (enrollment.status !== 'ACTIVE') {
-    throw new RpcException({
-      statusCode: 400,
-      message: 'La inscripción no está activa',
+  async withdrawEnrollment(activityId: number, participantId: number) {
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: {
+        activityId_participantId: {
+          activityId,
+          participantId,
+        },
+      },
+    });
+
+    if (!enrollment) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La inscripción no existe',
+      });
+    }
+
+    if (enrollment.status !== 'ACTIVE') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La inscripción no está activa',
+      });
+    }
+
+    return this.prisma.enrollment.update({
+      where: {
+        id: enrollment.id,
+      },
+      data: {
+        status: 'WITHDRAWN',
+      },
     });
   }
 
-  return this.prisma.enrollment.update({
-    where: {
-      id: enrollment.id,
-    },
-    data: {
-      status: 'WITHDRAWN',
-    },
-  });
-}
 
   async findMeeting(id: number) {
     return this.prisma.meeting.findUnique({
       where: { id },
+      include: {
+        activity: true,
+      },
     });
   }
 
@@ -279,6 +283,24 @@ async withdrawEnrollment(activityId: number, participantId: number) {
       where: {
         activityId,
         status: 'ACTIVE',
+      },
+    });
+  }
+
+  async findEnrollmentsByParticipant(participantId: number) {
+    return this.prisma.enrollment.findMany({
+      where: {
+        participantId,
+      },
+      include: {
+        activity: {
+          include: {
+            meetings: true,
+          },
+        },
+      },
+      orderBy: {
+        enrolledAt: 'desc',
       },
     });
   }

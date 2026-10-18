@@ -1,9 +1,27 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, UseGuards} from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Inject,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AuthService } from './auth/auth.service';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import { firstValueFrom } from 'rxjs';
 
 @ApiTags('Muni API')
 @ApiBearerAuth()
@@ -23,10 +41,10 @@ export class AppController {
     private readonly locationService: ClientProxy,
 
     private readonly authService: AuthService,
-  ) {}
-
+  ) { }
 
   // USUARIOS
+
   @Get('users')
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
   @UseGuards(JwtAuthGuard)
@@ -90,14 +108,44 @@ export class AppController {
     });
   }
 
-
   // ACTIVIDADES
+
+  @Get('public/activities')
+  @ApiOperation({
+    summary: 'Obtener actividades activas para la página pública',
+  })
+  findPublicActivities() {
+    return this.activitiesService.send('find-activities', {});
+  }
+
   @Get('activities')
   @ApiOperation({ summary: 'Obtener todas las actividades' })
   @UseGuards(JwtAuthGuard)
   findAllActivities() {
     return this.activitiesService.send('find-activities', {});
-  } 
+  }
+
+  @Get('participant/enrollments')
+  @ApiOperation({
+    summary: 'Consultar las inscripciones del participante autenticado',
+  })
+  @UseGuards(JwtAuthGuard)
+  findMyEnrollments(
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    if (!req.user.roles?.includes('PARTICIPANTE')) {
+      throw new ForbiddenException(
+        'Solo los participantes pueden consultar sus inscripciones',
+      );
+    }
+
+    return this.activitiesService.send(
+      'find-enrollments-by-participant',
+      {
+        participantId: Number(req.user.userId),
+      },
+    );
+  }
 
   @Post('activities')
   @ApiOperation({ summary: 'Crear una nueva actividad' })
@@ -153,7 +201,8 @@ export class AppController {
   @UseGuards(JwtAuthGuard)
   createMeeting(
     @Param('id') id: string,
-    @Body() data: {
+    @Body()
+    data: {
       dateTime: Date;
       location: string;
       latitude: number;
@@ -172,126 +221,175 @@ export class AppController {
   }
 
   @Post('activities/:id/enrollments')
-  @ApiOperation({ summary: 'Inscribir un participante en una actividad' })
+  @ApiOperation({
+    summary: 'Inscribir al participante autenticado en una actividad',
+  })
   @ApiParam({
     name: 'id',
     example: 1,
     description: 'ID de la actividad',
-  })
-  @ApiBody({
-    schema: {
-      example: {
-        participantId: 5,
-      },
-    },
   })
   @UseGuards(JwtAuthGuard)
   createEnrollment(
     @Param('id') id: string,
-    @Body() data: {
-     participantId: number;
-   },
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
+    if (!req.user.roles?.includes('PARTICIPANTE')) {
+      throw new ForbiddenException(
+        'Solo los participantes pueden inscribirse',
+      );
+    }
+
     return this.activitiesService.send('create-enrollment', {
       activityId: Number(id),
-      participantId: data.participantId,
+      participantId: Number(req.user.userId),
     });
   }
 
   @Patch('activities/:id/enrollments/withdraw')
-  @ApiOperation({ summary: 'Retirar un participante de una actividad' })
+  @ApiOperation({
+    summary: 'Retirar al participante autenticado de una actividad',
+  })
   @ApiParam({
     name: 'id',
     example: 1,
     description: 'ID de la actividad',
   })
-  @ApiBody({
-    schema: {
-      example: {
-        participantId: 5,
-      },
-    },
-  })
   @UseGuards(JwtAuthGuard)
   withdrawEnrollment(
     @Param('id') id: string,
-    @Body() data: { participantId: number },
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
+    if (!req.user.roles?.includes('PARTICIPANTE')) {
+      throw new ForbiddenException(
+        'Solo los participantes pueden retirarse de sus inscripciones',
+      );
+    }
+
     return this.activitiesService.send('withdraw-enrollment', {
       activityId: Number(id),
-      participantId: data.participantId,
+      participantId: Number(req.user.userId),
     });
   }
 
-
   // ASISTENCIA
+
   @Post('attendance/open')
   @ApiOperation({ summary: 'Abrir una sesión de asistencia' })
-  @ApiBody({
-    schema: {
-      example: {
-        meetingId: 5,
-        openedBy: 6,
-        startTime: '2026-09-01T20:00:00.000Z',
-        endTime: '2026-09-01T20:30:00.000Z',
-      },
-    },
-  })
   @UseGuards(JwtAuthGuard)
-  openAttendance(
+  async openAttendance(
     @Body()
     data: {
       meetingId: number;
-      openedBy: number;
       startTime: Date;
       endTime: Date;
     },
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
-    return this.attendanceService.send('open-attendance', data);
+    const roles = req.user.roles ?? [];
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede abrir la asistencia',
+      );
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: Number(data.meetingId),
+      }),
+    );
+
+    if (!meeting) {
+      throw new ForbiddenException('La reunión no existe o no está disponible');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(meeting.activity?.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede abrir la asistencia',
+      );
+    }
+
+    return this.attendanceService.send('open-attendance', {
+      ...data,
+      openedBy: Number(req.user.userId),
+    });
   }
 
   @Post('attendance/close')
   @ApiOperation({ summary: 'Cerrar una sesión de asistencia' })
-  @ApiBody({
-    schema: {
-      example: {
-        sessionId: 5,
-      },
-    },
-  })
   @UseGuards(JwtAuthGuard)
-  closeAttendance(
-    @Body()
-    data: {
-      sessionId: number;
-    },
+  async closeAttendance(
+    @Body() data: { sessionId: number },
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
-    return this.attendanceService.send('close-attendance', data);
+    const roles = req.user.roles ?? [];
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede cerrar la asistencia',
+      );
+    }
+    const session = await firstValueFrom(
+      this.attendanceService.send('find-attendance-session', {
+        sessionId: Number(data.sessionId),
+      }),
+    );
+
+    if (!session) {
+      throw new ForbiddenException('La sesión de asistencia no existe');
+    }
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: Number(session.meetingId),
+      }),
+    );
+    if (!meeting) {
+      throw new ForbiddenException('La reunión no existe o no está disponible');
+    }
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(meeting.activity?.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede cerrar la asistencia',
+      );
+    }
+    return this.attendanceService.send('close-attendance', {
+      sessionId: Number(data.sessionId),
+    });
   }
 
   @Post('attendance/checkin')
-  @ApiOperation({ summary: 'Registrar asistencia de un participante' })
-  @ApiBody({
-    schema: {
-      example: {
-        sessionId: 5,
-        participantId: 6,
-        latitude: -38.9339,
-        longitude: -67.9903,
-      },
-    },
-  })
+  @ApiOperation({ summary: 'Registrar asistencia del participante autenticado' })
   @UseGuards(JwtAuthGuard)
   registerAttendance(
     @Body()
     data: {
       sessionId: number;
-      participantId: number;
       latitude: number;
       longitude: number;
     },
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
-    return this.attendanceService.send('register-attendance', data);
+    if (!req.user.roles?.includes('PARTICIPANTE')) {
+      throw new ForbiddenException(
+        'Solo los participantes pueden registrar su asistencia',
+      );
+    }
+
+    return this.attendanceService.send('register-attendance', {
+      ...data,
+      participantId: Number(req.user.userId),
+    });
   }
 
   @Get('attendance/history/:participantId')
@@ -304,29 +402,82 @@ export class AppController {
   @UseGuards(JwtAuthGuard)
   attendanceHistory(
     @Param('participantId') participantId: string,
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
+    const roles = req.user.roles ?? [];
+    const requestedId = Number(participantId);
+    const ownId = Number(req.user.userId);
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      !(roles.includes('PARTICIPANTE') && requestedId === ownId)
+    ) {
+      throw new ForbiddenException(
+        'No tenés permiso para consultar este historial',
+      );
+    }
+
     return this.attendanceService.send('attendance-history', {
-      participantId: Number(participantId),
+      participantId: requestedId,
     });
   }
 
   @Post('attendance/process-absences')
-  @ApiOperation({ 
-    summary: 'Procesar ausencias de una sesion',
-    description: 'Registra como ausentes a los partivipantes inscriptos que no registraron asistencia',
+  @ApiOperation({
+    summary: 'Procesar ausencias de una sesión',
+    description:
+      'Registra como ausentes a los participantes inscriptos que no registraron asistencia',
   })
-  @ApiBody({
-    schema: {
-      example: {
-        sessionId: 5,
-      },
-    },
-  })
-  @UseGuards(JwtAuthGuard)
-  processAbsences(@Body() data: { sessionId: number }) {
-    return this.attendanceService.send('process-absences', data);
-  }
 
+  @UseGuards(JwtAuthGuard)
+  async processAbsences(
+    @Body() data: { sessionId: number },
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const roles = req.user.roles ?? [];
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede procesar ausencias',
+      );
+    }
+
+    const session = await firstValueFrom(
+      this.attendanceService.send('find-attendance-session', {
+        sessionId: Number(data.sessionId),
+      }),
+    );
+
+    if (!session) {
+      throw new ForbiddenException('La sesión de asistencia no existe');
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: Number(session.meetingId),
+      }),
+    );
+
+    if (!meeting) {
+      throw new ForbiddenException('La reunión no existe o no está disponible');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(meeting.activity?.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede procesar ausencias',
+      );
+    }
+
+    return this.attendanceService.send('process-absences', {
+      sessionId: Number(data.sessionId),
+    });
+  }
 
   // LOCALIZACION
   @Post('location/validate')
@@ -351,7 +502,7 @@ export class AppController {
       classroomLatitude: number;
       classroomLongitude: number;
       allowedRadius: number;
-    },  
+    },
   ) {
     return this.locationService.send('validate-location', data);
   }
@@ -369,5 +520,4 @@ export class AppController {
       enrollmentId: Number(id),
     });
   }
-
 }
