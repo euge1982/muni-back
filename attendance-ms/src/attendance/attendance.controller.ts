@@ -53,4 +53,9 @@ export class AttendanceController {
     return this.attendanceService.findSession(data.sessionId);
   }
 
+  @MessagePattern('find-attendance-session-by-meeting')
+  findSessionByMeeting(data: { meetingId: number }) {
+    return this.attendanceService.findSessionByMeeting(data.meetingId);
+  }
+
 }

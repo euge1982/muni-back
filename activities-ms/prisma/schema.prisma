@@ -95,3 +95,12 @@ model Material {
 
   @@map("materials")
 }
+model ProcessedAbsence {
+  id           Int      @id @default(autoincrement())
+  enrollmentId Int
+  sessionId    Int
+  processedAt  DateTime @default(now())
+
+  @@unique([enrollmentId, sessionId])
+  @@map("processed_absences")
+}

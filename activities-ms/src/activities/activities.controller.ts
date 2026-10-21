@@ -88,8 +88,10 @@ export class ActivitiesController {
   }
 
   @MessagePattern('register-absence')
-  registerAbsence(data: { enrollmentId: number }) {
-    return this.activitiesService.registerAbsence(data.enrollmentId);
+  registerAbsence(data: { enrollmentId: number; sessionId: number }) {
+    return this.activitiesService.registerAbsence(
+      data.enrollmentId,
+      data.sessionId,
+    );
   }
-
 }

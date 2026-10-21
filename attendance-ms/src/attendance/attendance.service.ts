@@ -1,3 +1,4 @@
+
 import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
@@ -14,7 +15,6 @@ export class AttendanceService {
 
     @Inject('ACTIVITIES_SERVICE')
     private readonly activitiesService: ClientProxy,
-
   ) { }
 
   async openAttendance(data: {
@@ -23,43 +23,104 @@ export class AttendanceService {
     startTime: Date;
     endTime: Date;
   }) {
-    const meeting = await firstValueFrom(
-      this.activitiesService.send('find-meeting', {
-        id: data.meetingId,
-      }),
-    );
+    try {
+      const startTime = new Date(data.startTime);
 
-    if (!meeting) {
-      throw new RpcException({
-        statusCode: 404,
-        message: 'La reunión no existe',
+      if (Number.isNaN(startTime.getTime())) {
+        throw new RpcException({
+          statusCode: 400,
+          message: 'La fecha de inicio no es válida',
+        });
+      }
+
+      const meeting = await firstValueFrom(
+        this.activitiesService.send('find-meeting', {
+          id: data.meetingId,
+        }),
+      );
+
+      if (!meeting) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'La reunión no existe',
+        });
+      }
+
+      if (meeting.status === 'SUSPENDED') {
+        throw new RpcException({
+          statusCode: 400,
+          message: 'La reunión está suspendida',
+        });
+      }
+
+      const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
+
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(${data.meetingId})
+      `;
+
+        const now = new Date();
+
+        const existingSession = await tx.attendanceSession.findFirst({
+          where: {
+            meetingId: data.meetingId,
+            status: 'OPEN',
+            endTime: { gte: now },
+          },
+        });
+
+        if (existingSession) {
+          throw new RpcException({
+            statusCode: 409,
+            message:
+              'Ya existe una sesión de asistencia abierta o pendiente para esta reunión',
+          });
+        }
+
+        return tx.attendanceSession.create({
+          data: {
+            meetingId: data.meetingId,
+            openedBy: data.openedBy,
+            startTime,
+            endTime,
+            status: 'OPEN',
+            absencesProcessed: false,
+          },
+        });
       });
+    } catch (error) {
+      throw error;
     }
-
-    if (meeting.status === 'SUSPENDED') {
-      throw new RpcException({
-        statusCode: 400,
-        message: 'La reunión está suspendida',
-      });
-    }
-
-    const startTime = new Date(data.startTime);
-    const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
-
-    return this.prisma.attendanceSession.create({
-      data: {
-        meetingId: data.meetingId,
-        openedBy: data.openedBy,
-        startTime,
-        endTime,
-        status: 'OPEN',
-      },
-    });
   }
 
   async findSession(sessionId: number) {
     return this.prisma.attendanceSession.findUnique({
       where: { id: sessionId },
+    });
+  }
+
+  async findSessionByMeeting(meetingId: number) {
+    const now = new Date();
+
+    const activeSession =
+      await this.prisma.attendanceSession.findFirst({
+        where: {
+          meetingId,
+          status: 'OPEN',
+          startTime: { lte: now },
+          endTime: { gte: now },
+        },
+        orderBy: { id: 'desc' },
+      });
+
+    if (activeSession) {
+      return activeSession;
+    }
+
+    return this.prisma.attendanceSession.findFirst({
+      where: { meetingId },
+      orderBy: { id: 'desc' },
     });
   }
 
@@ -75,29 +136,21 @@ export class AttendanceService {
       });
     }
 
-    // Si ya está cerrada, no hacemos nada
     if (session.status === 'CLOSED') {
       return session;
     }
 
-    const now = new Date();
-
-    // No se puede cerrar antes de que termine
-    if (now < session.endTime) {
+    if (new Date() < session.endTime) {
       throw new RpcException({
         statusCode: 400,
         message: 'La sesión todavía está abierta',
       });
     }
 
-    // Procesamos las ausencias antes de cerrar definitivamente
-    await this.processAbsences(session.id);
-
+    // El cierre no procesa ausencias.
     return this.prisma.attendanceSession.update({
       where: { id: session.id },
-      data: {
-        status: 'CLOSED',
-      },
+      data: { status: 'CLOSED' },
     });
   }
 
@@ -128,18 +181,9 @@ export class AttendanceService {
     }
 
     if (now > session.endTime) {
-      if (session.status === 'OPEN') {
-        await this.processAbsences(session.id);
-
-        await this.prisma.attendanceSession.update({
-          where: { id: session.id },
-          data: { status: 'CLOSED' },
-        });
-      }
-
       throw new RpcException({
         statusCode: 400,
-        message: 'La asistencia ya está cerrada',
+        message: 'El horario de asistencia ha finalizado',
       });
     }
 
@@ -162,11 +206,11 @@ export class AttendanceService {
     if (existingAttendance) {
       throw new RpcException({
         statusCode: 400,
-        message: 'El participante ya registró asistencia en esta sesión',
+        message:
+          'El participante ya registró asistencia en esta sesión',
       });
     }
 
-    // Buscamos la reunión correspondiente a esta sesión.
     const meeting = await firstValueFrom(
       this.activitiesService.send('find-meeting', {
         id: session.meetingId,
@@ -190,11 +234,11 @@ export class AttendanceService {
     if (!enrollment || enrollment.status !== 'ACTIVE') {
       throw new RpcException({
         statusCode: 400,
-        message: 'El participante no está inscripto en esta actividad',
+        message:
+          'El participante no está inscripto en esta actividad',
       });
     }
 
-    // Validamos la ubicación del participante.
     const locationValidation = await firstValueFrom(
       this.locationService.send('validate-location', {
         latitude: data.latitude,
@@ -244,6 +288,22 @@ export class AttendanceService {
       });
     }
 
+    if (session.status !== 'CLOSED') {
+      throw new RpcException({
+        statusCode: 400,
+        message:
+          'La sesión debe estar cerrada para procesar las ausencias',
+      });
+    }
+
+    if (session.absencesProcessed) {
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          'Las ausencias de esta sesión ya fueron procesadas',
+      });
+    }
+
     const meeting = await firstValueFrom(
       this.activitiesService.send('find-meeting', {
         id: session.meetingId,
@@ -257,10 +317,17 @@ export class AttendanceService {
       });
     }
 
-    // Una reunión suspendida no genera ausencias
     if (meeting.status === 'SUSPENDED') {
+      await this.prisma.attendanceSession.update({
+        where: { id: sessionId },
+        data: { absencesProcessed: true },
+      });
+
       return {
-        message: 'La reunión está suspendida. No se registran ausencias.',
+        message:
+          'La reunión está suspendida. No se registran ausencias.',
+        processed: 0,
+        dropped: 0,
       };
     }
 
@@ -283,32 +350,41 @@ export class AttendanceService {
         },
       });
 
-      // Si no tiene asistencia, faltó
-      if (!attendance) {
-        const updatedEnrollment = await firstValueFrom(
-          this.activitiesService.send('register-absence', {
-            enrollmentId: enrollment.id,
-          }),
-        );
+      if (attendance) {
+        continue;
+      }
 
-        await this.prisma.attendance.create({
-          data: {
-            sessionId,
-            participantId: enrollment.participantId,
-            latitude: 0,
-            longitude: 0,
-            checkInTime: session.endTime,
-            status: 'ABSENT',
-          },
-        });
+      // Crear primero el registro evita incrementar la ausencia
+      // si ya existe una asistencia para este participante.
+      await this.prisma.attendance.create({
+        data: {
+          sessionId,
+          participantId: enrollment.participantId,
+          latitude: 0,
+          longitude: 0,
+          checkInTime: session.endTime,
+          status: 'ABSENT',
+        },
+      });
 
-        processed++;
+      const updatedEnrollment = await firstValueFrom(
+        this.activitiesService.send('register-absence', {
+          enrollmentId: enrollment.id,
+          sessionId,
+        }),
+      );
 
-        if (updatedEnrollment.status === 'DROPPED') {
-          dropped++;
-        }
+      processed++;
+
+      if (updatedEnrollment.status === 'DROPPED') {
+        dropped++;
       }
     }
+
+    await this.prisma.attendanceSession.update({
+      where: { id: sessionId },
+      data: { absencesProcessed: true },
+    });
 
     return {
       message: 'Ausencias procesadas correctamente',
@@ -316,5 +392,4 @@ export class AttendanceService {
       dropped,
     };
   }
-
 }

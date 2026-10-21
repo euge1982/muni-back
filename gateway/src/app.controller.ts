@@ -9,6 +9,7 @@ import {
   Post,
   Req,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -67,6 +68,67 @@ export class AppController {
   })
   createUser(@Body() data: any) {
     return this.usersService.send('create-user', data);
+  }
+
+
+  @Post('auth/register')
+  @ApiOperation({ summary: 'Registrar un nuevo participante' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['firstName', 'lastName', 'email', 'password'],
+      properties: {
+        firstName: { type: 'string', example: 'Juan' },
+        lastName: { type: 'string', example: 'Pérez' },
+        email: { type: 'string', format: 'email', example: 'juan@example.com' },
+        password: { type: 'string', minLength: 8, example: 'ClaveSegura123' },
+        phone: { type: 'string', example: '2991234567' },
+      },
+    },
+  })
+  async registerParticipant(
+    @Body()
+    data: {
+      firstName: string;
+      lastName: string;
+      email: string;
+      password: string;
+      phone?: string;
+    },
+  ) {
+    const firstName = data.firstName?.trim();
+    const lastName = data.lastName?.trim();
+    const email = data.email?.trim().toLowerCase();
+    const password = data.password;
+    const phone = data.phone?.trim() || undefined;
+
+    if (!firstName || !lastName || !email || !password) {
+      throw new BadRequestException(
+        'Nombre, apellido, correo y contraseña son obligatorios',
+      );
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new BadRequestException(
+        'El correo electrónico no es válido',
+      );
+    }
+
+    if (password.length < 8) {
+      throw new BadRequestException(
+        'La contraseña debe tener al menos 8 caracteres',
+      );
+    }
+
+    return firstValueFrom(
+      this.usersService.send('create-user', {
+        firstName,
+        lastName,
+        email,
+        password,
+        ...(phone && { phone }),
+      }),
+    );
   }
 
   @Post('auth/login')
@@ -220,6 +282,104 @@ export class AppController {
     });
   }
 
+  @Patch('meetings/:id')
+  @ApiOperation({ summary: 'Actualizar un encuentro existente' })
+  @ApiParam({
+    name: 'id',
+    example: 1,
+    description: 'ID del encuentro',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        dateTime: { type: 'string', format: 'date-time' },
+        location: { type: 'string' },
+        latitude: { type: 'number', example: -38.924056 },
+        longitude: { type: 'number', example: -67.981111 },
+        allowedRadius: { type: 'number', example: 100 },
+        status: {
+          type: 'string',
+          enum: ['SCHEDULED', 'SUSPENDED', 'FINISHED'],
+        },
+      },
+    },
+  })
+  @UseGuards(JwtAuthGuard)
+  async updateMeeting(
+    @Param('id') id: string,
+    @Body()
+    data: {
+      dateTime?: Date;
+      location?: string;
+      latitude?: number;
+      longitude?: number;
+      allowedRadius?: number;
+      status?: 'SCHEDULED' | 'SUSPENDED' | 'FINISHED';
+    },
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const meetingId = Number(id);
+
+    if (!Number.isInteger(meetingId) || meetingId <= 0) {
+      throw new BadRequestException('El ID del encuentro no es válido');
+    }
+
+    const roles = req.user.roles ?? [];
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      !roles.includes('INSTRUCTOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un administrador o instructor puede actualizar el encuentro',
+      );
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: meetingId,
+      }),
+    );
+
+    if (!meeting) {
+      throw new BadRequestException('El encuentro no existe');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(meeting.activity?.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede actualizar el encuentro',
+      );
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('update-meeting', {
+        id: meetingId,
+        ...(data.dateTime !== undefined && {
+          dateTime: data.dateTime,
+        }),
+        ...(data.location !== undefined && {
+          location: data.location,
+        }),
+        ...(data.latitude !== undefined && {
+          latitude: Number(data.latitude),
+        }),
+        ...(data.longitude !== undefined && {
+          longitude: Number(data.longitude),
+        }),
+        ...(data.allowedRadius !== undefined && {
+          allowedRadius: Number(data.allowedRadius),
+        }),
+        ...(data.status !== undefined && {
+          status: data.status,
+        }),
+      }),
+    );
+  }
+
   @Post('activities/:id/enrollments')
   @ApiOperation({
     summary: 'Inscribir al participante autenticado en una actividad',
@@ -276,6 +436,25 @@ export class AppController {
 
   @Post('attendance/open')
   @ApiOperation({ summary: 'Abrir una sesión de asistencia' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['meetingId', 'startTime', 'endTime'],
+      properties: {
+        meetingId: { type: 'number', example: 1 },
+        startTime: {
+          type: 'string',
+          format: 'date-time',
+          example: '2026-10-20T15:35:00.000Z',
+        },
+        endTime: {
+          type: 'string',
+          format: 'date-time',
+          example: '2026-10-20T16:05:00.000Z',
+        },
+      },
+    },
+  })
   @UseGuards(JwtAuthGuard)
   async openAttendance(
     @Body()
@@ -315,11 +494,16 @@ export class AppController {
         'Solo el responsable de la actividad puede abrir la asistencia',
       );
     }
-
-    return this.attendanceService.send('open-attendance', {
-      ...data,
-      openedBy: Number(req.user.userId),
-    });
+    try {
+      return await firstValueFrom(
+        this.attendanceService.send('open-attendance', {
+          ...data,
+          openedBy: Number(req.user.userId),
+        }),
+      );
+    } catch (error) {
+      throw error;
+    }
   }
 
   @Post('attendance/close')
@@ -368,8 +552,87 @@ export class AppController {
     });
   }
 
+
+  @Get('attendance/meeting/:meetingId/session')
+  @ApiOperation({
+    summary: 'Consultar la sesión de asistencia de un encuentro',
+  })
+  @UseGuards(JwtAuthGuard)
+  async findAttendanceSessionByMeeting(
+    @Param('meetingId') meetingId: string,
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const roles = req.user.roles ?? [];
+    const id = Number(meetingId);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException('El ID del encuentro no es válido');
+    }
+
+    const isAdmin = roles.includes('ADMINISTRADOR');
+    const isInstructor = roles.includes('INSTRUCTOR');
+    const isParticipant = roles.includes('PARTICIPANTE');
+
+    if (!isAdmin && !isInstructor && !isParticipant) {
+      throw new ForbiddenException(
+        'No tenés permiso para consultar la sesión de asistencia',
+      );
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', { id }),
+    );
+
+    if (!meeting) {
+      throw new ForbiddenException(
+        'El encuentro no existe o no está disponible',
+      );
+    }
+
+    if (isInstructor && !isAdmin) {
+      if (
+        Number(meeting.activity?.responsibleId) !==
+        Number(req.user.userId)
+      ) {
+        throw new ForbiddenException(
+          'Solo el responsable de la actividad puede consultar la sesión',
+        );
+      }
+    }
+    if (isParticipant && !isAdmin && !isInstructor) {
+      const enrollment = await firstValueFrom(
+        this.activitiesService.send('find-enrollment', {
+          activityId: Number(meeting.activityId),
+          participantId: Number(req.user.userId),
+        }),
+      );
+      if (!enrollment || enrollment.status !== 'ACTIVE') {
+        throw new ForbiddenException(
+          'Necesitás una inscripción activa para consultar esta sesión',
+        );
+      }
+    }
+    return firstValueFrom(
+      this.attendanceService.send(
+        'find-attendance-session-by-meeting',
+        { meetingId: id },
+      ),
+    );
+  }
+
   @Post('attendance/checkin')
   @ApiOperation({ summary: 'Registrar asistencia del participante autenticado' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['sessionId', 'latitude', 'longitude'],
+      properties: {
+        sessionId: { type: 'number', example: 1 },
+        latitude: { type: 'number', example: -38.9339 },
+        longitude: { type: 'number', example: -67.9903 },
+      },
+    },
+  })
   @UseGuards(JwtAuthGuard)
   registerAttendance(
     @Body()
@@ -428,7 +691,18 @@ export class AppController {
     description:
       'Registra como ausentes a los participantes inscriptos que no registraron asistencia',
   })
-
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['sessionId'],
+      properties: {
+        sessionId: {
+          type: 'number',
+          example: 3,
+        },
+      },
+    },
+  })
   @UseGuards(JwtAuthGuard)
   async processAbsences(
     @Body() data: { sessionId: number },

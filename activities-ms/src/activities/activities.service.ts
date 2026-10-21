@@ -234,6 +234,7 @@ export class ActivitiesService {
     });
   }
 
+
   async updateMeeting(data: {
     id: number;
     dateTime?: Date;
@@ -254,16 +255,30 @@ export class ActivitiesService {
       });
     }
 
+    const updateData = {
+      ...(data.dateTime !== undefined && {
+        dateTime: data.dateTime,
+      }),
+      ...(data.location !== undefined && {
+        location: data.location,
+      }),
+      ...(data.latitude !== undefined && {
+        latitude: data.latitude,
+      }),
+      ...(data.longitude !== undefined && {
+        longitude: data.longitude,
+      }),
+      ...(data.allowedRadius !== undefined && {
+        allowedRadius: data.allowedRadius,
+      }),
+      ...(data.status !== undefined && {
+        status: data.status,
+      }),
+    };
+
     return this.prisma.meeting.update({
       where: { id: data.id },
-      data: {
-        dateTime: data.dateTime,
-        location: data.location,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        allowedRadius: data.allowedRadius,
-        status: data.status,
-      },
+      data: updateData,
     });
   }
 
@@ -304,32 +319,52 @@ export class ActivitiesService {
       },
     });
   }
-
-  async registerAbsence(enrollmentId: number) {
-    const enrollment = await this.prisma.enrollment.findUnique({
-      where: { id: enrollmentId },
-    });
-
-    if (!enrollment) {
-      throw new RpcException({
-        statusCode: 404,
-        message: 'La inscripción no existe',
+  async registerAbsence(enrollmentId: number, sessionId: number) {
+    return this.prisma.$transaction(async (tx) => {
+      const enrollment = await tx.enrollment.findUnique({
+        where: { id: enrollmentId },
       });
-    }
 
-    // Si ya no está activa, no se modifica
-    if (enrollment.status !== 'ACTIVE') {
-      return enrollment;
-    }
+      if (!enrollment) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'La inscripción no existe',
+        });
+      }
 
-    const absenceCount = enrollment.absenceCount + 1;
+      const existingAbsence = await tx.processedAbsence.findUnique({
+        where: {
+          enrollmentId_sessionId: {
+            enrollmentId,
+            sessionId,
+          },
+        },
+      });
 
-    return this.prisma.enrollment.update({
-      where: { id: enrollmentId },
-      data: {
-        absenceCount,
-        status: absenceCount >= 3 ? 'DROPPED' : 'ACTIVE',
-      },
+      if (existingAbsence) {
+        return enrollment;
+      }
+
+      if (enrollment.status !== 'ACTIVE') {
+        return enrollment;
+      }
+
+      const absenceCount = enrollment.absenceCount + 1;
+
+      await tx.processedAbsence.create({
+        data: {
+          enrollmentId,
+          sessionId,
+        },
+      });
+
+      return tx.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          absenceCount,
+          status: absenceCount >= 3 ? 'DROPPED' : 'ACTIVE',
+        },
+      });
     });
   }
 
