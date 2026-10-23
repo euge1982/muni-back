@@ -3,10 +3,11 @@ import { MessagePattern } from '@nestjs/microservices';
 import { Role } from '@prisma/client';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 
 @Controller()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @MessagePattern('find-users')
   findAll() {
@@ -14,13 +15,24 @@ export class UsersController {
   }
 
   @MessagePattern('find-user')
-findById(data: { userId: number }) {
-  return this.usersService.findById(data.userId);
-}
+  findById(data: { userId: number }) {
+    return this.usersService.findById(data.userId);
+  }
 
   @MessagePattern('create-user')
   create(createUserDto: CreateUserDto) {
     return this.usersService.create(createUserDto);
+  }
+
+  @MessagePattern('update-user-profile')
+  updateProfile(data: {
+    userId: number;
+    profile: UpdateUserProfileDto;
+  }) {
+    return this.usersService.updateProfile(
+      data.userId,
+      data.profile,
+    );
   }
 
   @MessagePattern('update-user-roles')
@@ -29,10 +41,10 @@ findById(data: { userId: number }) {
   }
 
   @MessagePattern('validate-credentials')
-validateCredentials(data: { email: string; password: string }) {
-  return this.usersService.validateCredentials(
-    data.email,
-    data.password,
-  );
-}
+  validateCredentials(data: { email: string; password: string }) {
+    return this.usersService.validateCredentials(
+      data.email,
+      data.password,
+    );
+  }
 }

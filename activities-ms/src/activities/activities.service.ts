@@ -70,6 +70,188 @@ export class ActivitiesService {
     });
   }
 
+  async update(id: number, data: {
+    name?: string;
+    description?: string | null;
+    capacity?: number;
+    enrollmentStart?: Date;
+    enrollmentEnd?: Date;
+    responsibleId?: number;
+  }) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+    });
+
+    if (!activity) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La actividad no existe',
+      });
+    }
+    if (activity.status === 'FINISHED') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede modificar una actividad finalizada. Reactivala primero.',
+      });
+    }
+
+    const enrollmentStart =
+      data.enrollmentStart ?? activity.enrollmentStart;
+    const enrollmentEnd =
+      data.enrollmentEnd ?? activity.enrollmentEnd;
+
+    if (enrollmentStart >= enrollmentEnd) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El inicio de inscripción debe ser anterior al cierre',
+      });
+    }
+
+    if (data.capacity !== undefined) {
+      if (!Number.isInteger(data.capacity) || data.capacity <= 0) {
+        throw new RpcException({
+          statusCode: 400,
+          message: 'La capacidad debe ser un entero mayor que cero',
+        });
+      }
+
+      const activeEnrollments = await this.prisma.enrollment.count({
+        where: { activityId: id, status: 'ACTIVE' },
+      });
+
+      if (data.capacity < activeEnrollments) {
+        throw new RpcException({
+          statusCode: 400,
+          message: 'El cupo no puede ser menor que las inscripciones activas',
+        });
+      }
+    }
+
+    if (data.responsibleId !== undefined) {
+      const responsible = await firstValueFrom(
+        this.usersService.send('find-user', {
+          userId: data.responsibleId,
+        }),
+      );
+
+      if (!responsible) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'El responsable indicado no existe',
+        });
+      }
+
+      if (!responsible.roles?.includes('INSTRUCTOR')) {
+        throw new RpcException({
+          statusCode: 400,
+          message: 'El responsable debe tener el rol INSTRUCTOR',
+        });
+      }
+    }
+
+    return this.prisma.activity.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined && { name: data.name }),
+        ...(data.description !== undefined && {
+          description: data.description,
+        }),
+        ...(data.capacity !== undefined && { capacity: data.capacity }),
+        ...(data.enrollmentStart !== undefined && {
+          enrollmentStart: data.enrollmentStart,
+        }),
+        ...(data.enrollmentEnd !== undefined && {
+          enrollmentEnd: data.enrollmentEnd,
+        }),
+        ...(data.responsibleId !== undefined && {
+          responsibleId: data.responsibleId,
+        }),
+      },
+    });
+  }
+
+  async delete(id: number) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+      include: {
+        meetings: { select: { id: true }, take: 1 },
+        enrollments: { select: { id: true }, take: 1 },
+        materials: { select: { id: true }, take: 1 },
+      },
+    });
+
+    if (!activity) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La actividad no existe',
+      });
+    }
+
+    if (
+      activity.meetings.length > 0 ||
+      activity.enrollments.length > 0 ||
+      activity.materials.length > 0
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede eliminar una actividad con encuentros, inscripciones o materiales',
+      });
+    }
+
+    return this.prisma.activity.delete({
+      where: { id },
+    });
+  }
+
+  async finish(id: number) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+    });
+
+    if (!activity) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La actividad no existe',
+      });
+    }
+
+    if (activity.status === 'FINISHED') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La actividad ya está finalizada',
+      });
+    }
+
+    return this.prisma.activity.update({
+      where: { id },
+      data: { status: 'FINISHED' },
+    });
+  }
+
+  async reactivate(id: number) {
+    const activity = await this.prisma.activity.findUnique({
+      where: { id },
+    });
+
+    if (!activity) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La actividad no existe',
+      });
+    }
+
+    if (activity.status !== 'FINISHED') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Solo se pueden reactivar actividades finalizadas',
+      });
+    }
+
+    return this.prisma.activity.update({
+      where: { id },
+      data: { status: 'ACTIVE' },
+    });
+  }
   async createMeeting(createMeetingDto: CreateMeetingDto) {
     const activity = await this.prisma.activity.findUnique({
       where: { id: createMeetingDto.activityId },
@@ -79,6 +261,13 @@ export class ActivitiesService {
       throw new RpcException({
         statusCode: 404,
         message: 'La actividad indicada no existe',
+      });
+    }
+
+    if (activity.status !== 'ACTIVE') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se pueden crear encuentros para una actividad finalizada',
       });
     }
 
@@ -135,7 +324,7 @@ export class ActivitiesService {
 
     const now = new Date();
 
-    if (now < activity.enrollmentStart || now > activity.enrollmentEnd) {
+    if (now < activity.enrollmentStart || now >= activity.enrollmentEnd) {
       throw new RpcException({
         statusCode: 400,
         message: 'La inscripción está fuera del período permitido',
@@ -246,12 +435,22 @@ export class ActivitiesService {
   }) {
     const meeting = await this.prisma.meeting.findUnique({
       where: { id: data.id },
+      include: {
+        activity: true,
+      },
     });
 
     if (!meeting) {
       throw new RpcException({
         statusCode: 404,
         message: 'La reunión no existe',
+      });
+    }
+    if (meeting.activity.status === 'FINISHED') {
+      throw new RpcException({
+        statusCode: 400,
+        message:
+          'No se puede modificar un encuentro de una actividad finalizada. Reactivala primero.',
       });
     }
 

@@ -2,12 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import * as bcrypt from 'bcrypt';
 import { Role, Prisma } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async findAll() {
     const users = await this.prisma.user.findMany();
@@ -70,25 +71,80 @@ export class UsersService {
       throw error;
     }
   }
+  async updateProfile(
+    id: number,
+    profile: UpdateUserProfileDto,
+  ) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El ID del usuario no es válido',
+      });
+    }
 
-  async updateRoles(id: number, roles: Role[]) {
-  if (!roles.includes(Role.PARTICIPANTE)) {
-    throw new RpcException(
-      'El rol PARTICIPANTE es obligatorio',
-    );
+    const data: Prisma.UserUpdateInput = {};
+
+    if (profile.firstName !== undefined) {
+      data.firstName = profile.firstName;
+    }
+
+    if (profile.lastName !== undefined) {
+      data.lastName = profile.lastName;
+    }
+
+    if (profile.phone !== undefined) {
+      data.phone = profile.phone;
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se recibieron datos para actualizar',
+      });
+    }
+
+    try {
+      const user = await this.prisma.user.update({
+        where: { id },
+        data,
+      });
+
+      const { password, ...userWithoutPassword } = user;
+
+      return userWithoutPassword;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'El usuario no existe',
+        });
+      }
+
+      throw error;
+    }
   }
 
-  const user = await this.prisma.user.update({
-    where: { id },
-    data: {
-      roles,
-    },
-  });
+  async updateRoles(id: number, roles: Role[]) {
+    if (!roles.includes(Role.PARTICIPANTE)) {
+      throw new RpcException(
+        'El rol PARTICIPANTE es obligatorio',
+      );
+    }
 
-  const { password, ...userWithoutPassword } = user;
+    const user = await this.prisma.user.update({
+      where: { id },
+      data: {
+        roles,
+      },
+    });
 
-  return userWithoutPassword;
-}
+    const { password, ...userWithoutPassword } = user;
+
+    return userWithoutPassword;
+  }
 
   async validateCredentials(email: string, password: string) {
     const user = await this.findByEmail(email);

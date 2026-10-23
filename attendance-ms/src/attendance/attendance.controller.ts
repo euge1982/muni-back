@@ -53,6 +53,13 @@ export class AttendanceController {
     return this.attendanceService.findSession(data.sessionId);
   }
 
+  @MessagePattern('find-attendances-by-session')
+  findAttendancesBySession(data: { sessionId: number }) {
+    return this.attendanceService.findAttendancesBySession(
+      data.sessionId,
+    );
+  }
+
   @MessagePattern('find-attendance-session-by-meeting')
   findSessionByMeeting(data: { meetingId: number }) {
     return this.attendanceService.findSessionByMeeting(data.meetingId);

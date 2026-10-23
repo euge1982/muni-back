@@ -26,6 +26,35 @@ export class ActivitiesController {
     return this.activitiesService.create(createActivityDto);
   }
 
+  @MessagePattern('update-activity')
+  updateActivity(data: {
+    id: number;
+    name?: string;
+    description?: string | null;
+    capacity?: number;
+    enrollmentStart?: Date;
+    enrollmentEnd?: Date;
+    responsibleId?: number;
+  }) {
+    const { id, ...activityData } = data;
+    return this.activitiesService.update(id, activityData);
+  }
+
+  @MessagePattern('delete-activity')
+  deleteActivity(data: { id: number }) {
+    return this.activitiesService.delete(data.id);
+  }
+
+  @MessagePattern('finish-activity')
+  finishActivity(data: { id: number }) {
+    return this.activitiesService.finish(data.id);
+  }
+
+  @MessagePattern('reactivate-activity')
+  reactivateActivity(data: { id: number }) {
+    return this.activitiesService.reactivate(data.id);
+  }
+
   @MessagePattern('create-meeting')
   createMeeting(createMeetingDto: CreateMeetingDto) {
     return this.activitiesService.createMeeting(createMeetingDto);

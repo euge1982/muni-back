@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Inject,
@@ -10,6 +11,7 @@ import {
   Req,
   UseGuards,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -51,6 +53,134 @@ export class AppController {
   @UseGuards(JwtAuthGuard)
   findAllUsers() {
     return this.usersService.send('find-users', {});
+  }
+
+  @Get('users/me')
+  @ApiOperation({ summary: 'Consultar el perfil propio' })
+  @UseGuards(JwtAuthGuard)
+  async getMyProfile(
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    if (
+      !req.user.roles?.some((role) =>
+        ['PARTICIPANTE', 'INSTRUCTOR'].includes(role),
+      )
+    ) {
+      throw new ForbiddenException(
+        'Esta operación está disponible para participantes e instructores',
+      );
+    }
+
+    const userId = Number(req.user.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new BadRequestException('El usuario autenticado no es válido');
+    }
+
+    const user = await firstValueFrom(
+      this.usersService.send('find-user', { userId }),
+    );
+
+    if (!user) {
+      throw new NotFoundException('No se encontró el perfil');
+    }
+
+    return user;
+  }
+
+  @Patch('users/me')
+  @ApiOperation({ summary: 'Actualizar el perfil propio' })
+  @ApiBody({
+    required: true,
+    schema: {
+      type: 'object',
+      properties: {
+        firstName: { type: 'string', example: 'Usuario Actualizado' },
+        lastName: { type: 'string', example: 'Participante' },
+        phone: { type: 'string', nullable: true, example: '299123456789' },
+      },
+    },
+  })
+  @UseGuards(JwtAuthGuard)
+  async updateMyProfile(
+    @Body()
+    data: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string | null;
+    },
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    if (
+      !req.user.roles?.some((role) =>
+        ['PARTICIPANTE', 'INSTRUCTOR'].includes(role),
+      )
+    ) {
+      throw new ForbiddenException(
+        'Esta operación está disponible para participantes e instructores',
+      );
+    }
+
+    const userId = Number(req.user.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new BadRequestException('El usuario autenticado no es válido');
+    }
+
+    const profile: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string | null;
+    } = {};
+
+    if (data.firstName !== undefined) {
+      if (
+        typeof data.firstName !== 'string' ||
+        !data.firstName.trim()
+      ) {
+        throw new BadRequestException('El nombre no es válido');
+      }
+
+      profile.firstName = data.firstName.trim();
+    }
+
+    if (data.lastName !== undefined) {
+      if (
+        typeof data.lastName !== 'string' ||
+        !data.lastName.trim()
+      ) {
+        throw new BadRequestException('El apellido no es válido');
+      }
+
+      profile.lastName = data.lastName.trim();
+    }
+
+    if (data.phone !== undefined) {
+      if (
+        data.phone !== null &&
+        typeof data.phone !== 'string'
+      ) {
+        throw new BadRequestException('El teléfono no es válido');
+      }
+
+      profile.phone =
+        typeof data.phone === 'string'
+          ? data.phone.trim() || null
+          : null;
+    }
+
+    if (Object.keys(profile).length === 0) {
+      throw new BadRequestException(
+        'Ingresá al menos un dato para actualizar',
+      );
+    }
+
+    return firstValueFrom(
+      this.usersService.send('update-user-profile', {
+        userId,
+        profile,
+      }),
+    );
   }
 
   @Post('users')
@@ -228,6 +358,122 @@ export class AppController {
     return this.activitiesService.send('create-activity', data);
   }
 
+  @Patch('activities/:id')
+  @ApiOperation({ summary: 'Actualizar una actividad' })
+  @ApiParam({
+    name: 'id',
+    example: 1,
+    description: 'ID de la actividad',
+  })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async updateActivity(
+    @Param('id') id: string,
+    @Body()
+    data: {
+      name?: string;
+      description?: string | null;
+      capacity?: number;
+      enrollmentStart?: string;
+      enrollmentEnd?: string;
+      responsibleId?: number;
+    },
+  ) {
+    const activityId = Number(id);
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    const activityData = {
+      ...data,
+      ...(data.enrollmentStart !== undefined && {
+        enrollmentStart: new Date(data.enrollmentStart),
+      }),
+      ...(data.enrollmentEnd !== undefined && {
+        enrollmentEnd: new Date(data.enrollmentEnd),
+      }),
+      ...(data.capacity !== undefined && {
+        capacity: Number(data.capacity),
+      }),
+      ...(data.responsibleId !== undefined && {
+        responsibleId: Number(data.responsibleId),
+      }),
+    };
+
+    return firstValueFrom(
+      this.activitiesService.send('update-activity', {
+        id: activityId,
+        ...activityData,
+      }),
+    );
+  }
+
+  @Delete('activities/:id')
+  @ApiOperation({ summary: 'Eliminar una actividad sin registros asociados' })
+  @ApiParam({
+    name: 'id',
+    example: 1,
+    description: 'ID de la actividad',
+  })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async deleteActivity(@Param('id') id: string) {
+    const activityId = Number(id);
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('delete-activity', {
+        id: activityId,
+      }),
+    );
+  }
+
+  @Patch('activities/:id/finish')
+  @ApiOperation({ summary: 'Finalizar una actividad sin eliminar sus registros' })
+  @ApiParam({
+    name: 'id',
+    example: 1,
+    description: 'ID de la actividad',
+  })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async finishActivity(@Param('id') id: string) {
+    const activityId = Number(id);
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('finish-activity', {
+        id: activityId,
+      }),
+    );
+  }
+
+  @Patch('activities/:id/reactivate')
+  @ApiOperation({ summary: 'Reactivar una actividad finalizada' })
+  @ApiParam({
+    name: 'id',
+    example: 1,
+    description: 'ID de la actividad',
+  })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async reactivateActivity(@Param('id') id: string) {
+    const activityId = Number(id);
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('reactivate-activity', {
+        id: activityId,
+      }),
+    );
+  }
+
   @Get('activities/:id')
   @ApiOperation({ summary: 'Obtener una actividad por ID' })
   @ApiParam({
@@ -240,6 +486,83 @@ export class AppController {
     return this.activitiesService.send('find-activity', {
       id: Number(id),
     });
+  }
+  @Get('activities/:id/active-enrollments')
+  @ApiOperation({
+    summary: 'Consultar inscripciones activas de una actividad',
+  })
+  @UseGuards(JwtAuthGuard)
+  async findActiveEnrollments(
+    @Param('id') id: string,
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const activityId = Number(id);
+    const roles = req.user.roles ?? [];
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede consultar las inscripciones',
+      );
+    }
+
+    const activity = await firstValueFrom(
+      this.activitiesService.send('find-activity', {
+        id: activityId,
+      }),
+    );
+
+    if (!activity) {
+      throw new NotFoundException('La actividad no existe');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(activity.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede consultar sus inscripciones',
+      );
+    }
+
+    const enrollments = await firstValueFrom(
+      this.activitiesService.send('find-active-enrollments', {
+        activityId,
+      }),
+    );
+
+    const activeEnrollments = Array.isArray(enrollments)
+      ? enrollments
+      : [];
+
+    const participants = await Promise.all(
+      activeEnrollments.map(async (enrollment) => {
+        const participant = await firstValueFrom(
+          this.usersService.send('find-user', {
+            userId: Number(enrollment.participantId),
+          }),
+        );
+
+        return {
+          ...enrollment,
+          participant: participant
+            ? {
+              id: participant.id,
+              firstName: participant.firstName,
+              lastName: participant.lastName,
+            }
+            : null,
+        };
+      }),
+    );
+
+    return participants;
   }
 
   @Post('activities/:id/meetings')
@@ -261,7 +584,7 @@ export class AppController {
     },
   })
   @UseGuards(JwtAuthGuard)
-  createMeeting(
+  async createMeeting(
     @Param('id') id: string,
     @Body()
     data: {
@@ -271,15 +594,53 @@ export class AppController {
       longitude: number;
       allowedRadius: number;
     },
+    @Req() req: { user: { userId: number; roles: string[] } },
   ) {
-    return this.activitiesService.send('create-meeting', {
-      activityId: Number(id),
-      dateTime: data.dateTime,
-      location: data.location,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      allowedRadius: data.allowedRadius,
-    });
+    const activityId = Number(id);
+    const roles = req.user.roles ?? [];
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede crear encuentros',
+      );
+    }
+
+    const activity = await firstValueFrom(
+      this.activitiesService.send('find-activity', {
+        id: activityId,
+      }),
+    );
+
+    if (!activity) {
+      throw new NotFoundException('La actividad no existe');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(activity.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede crear encuentros',
+      );
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('create-meeting', {
+        activityId,
+        dateTime: data.dateTime,
+        location: data.location,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        allowedRadius: data.allowedRadius,
+      }),
+    );
   }
 
   @Patch('meetings/:id')
@@ -485,6 +846,11 @@ export class AppController {
     if (!meeting) {
       throw new ForbiddenException('La reunión no existe o no está disponible');
     }
+    if (meeting.activity?.status !== 'ACTIVE') {
+      throw new BadRequestException(
+        'No se puede abrir la asistencia de una actividad finalizada',
+      );
+    }
 
     if (
       !roles.includes('ADMINISTRADOR') &&
@@ -617,6 +983,70 @@ export class AppController {
         'find-attendance-session-by-meeting',
         { meetingId: id },
       ),
+    );
+  }
+
+  @Get('attendance/session/:sessionId/records')
+  @ApiOperation({
+    summary: 'Consultar las asistencias registradas en una sesión',
+  })
+  @UseGuards(JwtAuthGuard)
+  async findAttendancesBySession(
+    @Param('sessionId') sessionId: string,
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const id = Number(sessionId);
+    const roles = req.user.roles ?? [];
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException(
+        'El ID de la sesión no es válido',
+      );
+    }
+
+    const isAdmin = roles.includes('ADMINISTRADOR');
+    const isInstructor = roles.includes('INSTRUCTOR');
+
+    if (!isAdmin && !isInstructor) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede consultar las asistencias',
+      );
+    }
+
+    const session = await firstValueFrom(
+      this.attendanceService.send('find-attendance-session', {
+        sessionId: id,
+      }),
+    );
+
+    if (!session) {
+      throw new NotFoundException('La sesión no existe');
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: Number(session.meetingId),
+      }),
+    );
+
+    if (!meeting) {
+      throw new NotFoundException('El encuentro no existe');
+    }
+
+    if (
+      !isAdmin &&
+      Number(meeting.activity?.responsibleId) !==
+      Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede consultar estas asistencias',
+      );
+    }
+
+    return firstValueFrom(
+      this.attendanceService.send('find-attendances-by-session', {
+        sessionId: id,
+      }),
     );
   }
 

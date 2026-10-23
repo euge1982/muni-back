@@ -100,6 +100,13 @@ export class AttendanceService {
     });
   }
 
+  async findAttendancesBySession(sessionId: number) {
+    return this.prisma.attendance.findMany({
+      where: { sessionId },
+      orderBy: { participantId: 'asc' },
+    });
+  }
+
   async findSessionByMeeting(meetingId: number) {
     const now = new Date();
 
@@ -351,6 +358,21 @@ export class AttendanceService {
       });
 
       if (attendance) {
+        if (attendance.status === 'ABSENT') {
+          const updatedEnrollment = await firstValueFrom(
+            this.activitiesService.send('register-absence', {
+              enrollmentId: enrollment.id,
+              sessionId,
+            }),
+          );
+
+          processed++;
+
+          if (updatedEnrollment.status === 'DROPPED') {
+            dropped++;
+          }
+        }
+
         continue;
       }
 
