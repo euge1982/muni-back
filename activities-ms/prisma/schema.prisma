@@ -30,6 +30,13 @@ enum MaterialType {
   LINK
 }
 
+enum EnrollmentDropReason {
+  ABSENCES
+  ILLNESS
+  ADMINISTRATIVE
+  OTHER
+}
+
 model Activity {
   id              Int      @id @default(autoincrement())
   name            String
@@ -60,11 +67,27 @@ model Meeting {
   status      MeetingStatus @default(SCHEDULED)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
+  locationId Int?
+  meetingLocation MeetingLocation? @relation(fields: [locationId], references: [id])
 
   activity    Activity      @relation(fields: [activityId], references: [id])
   //attendances Attendance[]
 
   @@map("meetings")
+}
+
+model MeetingLocation {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  latitude  Decimal
+  longitude Decimal
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meetings  Meeting[]
+
+  @@map("meeting_locations")
 }
 
 model Enrollment {
@@ -73,6 +96,7 @@ model Enrollment {
   participantId Int
   status        EnrollmentStatus @default(ACTIVE)
   absenceCount  Int              @default(0)
+  dropReason    EnrollmentDropReason?
   enrolledAt    DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 

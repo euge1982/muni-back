@@ -19,6 +19,11 @@ enum Role {
   ADMINISTRADOR
 }
 
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
 model User {
   id          Int       @id @default(autoincrement())
   firstName   String
@@ -26,7 +31,7 @@ model User {
   email       String    @unique
   password    String
   phone       String?
-  status      String
+  status      UserStatus @default(ACTIVE)
   roles       Role[]    @default([PARTICIPANTE])
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

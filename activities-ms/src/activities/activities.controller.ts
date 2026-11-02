@@ -60,6 +60,25 @@ export class ActivitiesController {
     return this.activitiesService.createMeeting(createMeetingDto);
   }
 
+  @MessagePattern('create-meeting-location')
+  createMeetingLocation(data: {
+    name: string;
+    latitude: number;
+    longitude: number;
+  }) {
+    return this.activitiesService.createMeetingLocation(data);
+  }
+
+  @MessagePattern('find-meeting-locations')
+  findMeetingLocations() {
+    return this.activitiesService.findMeetingLocations();
+  }
+
+  @MessagePattern('deactivate-meeting-location')
+  deactivateMeetingLocation(data: { id: number }) {
+    return this.activitiesService.deactivateMeetingLocation(data.id);
+  }
+
   @MessagePattern('find-meeting')
   findMeeting(data: { id: number }) {
     return this.activitiesService.findMeeting(data.id);
@@ -69,10 +88,7 @@ export class ActivitiesController {
   updateMeeting(data: {
     id: number;
     dateTime?: Date;
-    location?: string;
-    latitude?: number;
-    longitude?: number;
-    allowedRadius?: number;
+    locationId?: number;
     status?: 'SCHEDULED' | 'SUSPENDED' | 'FINISHED';
   }) {
     return this.activitiesService.updateMeeting(data);
@@ -104,6 +120,13 @@ export class ActivitiesController {
     return this.activitiesService.findActiveEnrollments(data.activityId);
   }
 
+  @MessagePattern('find-all-enrollments-by-activity')
+  findAllEnrollmentsByActivity(data: { activityId: number }) {
+    return this.activitiesService.findAllEnrollmentsByActivity(
+      data.activityId,
+    );
+  }
+
   @MessagePattern('find-enrollments-by-participant')
   findEnrollmentsByParticipant(data: { participantId: number }) {
     return this.activitiesService.findEnrollmentsByParticipant(
@@ -123,4 +146,13 @@ export class ActivitiesController {
       data.sessionId,
     );
   }
+
+  @MessagePattern('remove-absence')
+  removeAbsence(data: { enrollmentId: number; sessionId: number }) {
+    return this.activitiesService.removeAbsence(
+      data.enrollmentId,
+      data.sessionId,
+    );
+  }
+
 }

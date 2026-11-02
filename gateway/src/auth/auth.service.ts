@@ -24,6 +24,10 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
+    if (user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('La cuenta está desactivada');
+    }
+
     const payload = {
       sub: user.id,
       email: user.email,

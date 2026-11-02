@@ -34,6 +34,15 @@ export class AttendanceController {
     return this.attendanceService.registerAttendance(data);
   }
 
+  @MessagePattern('update-manual-attendance')
+  updateManualAttendance(data: {
+    sessionId: number;
+    participantId: number;
+    status: 'PRESENT' | 'ABSENT';
+  }) {
+    return this.attendanceService.updateManualAttendance(data);
+  }
+
   @MessagePattern('attendance-history')
   attendanceHistory(data: {
     participantId: number;

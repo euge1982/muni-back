@@ -50,7 +50,7 @@ export class AppController {
 
   @Get('users')
   @ApiOperation({ summary: 'Obtener todos los usuarios' })
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   findAllUsers() {
     return this.usersService.send('find-users', {});
   }
@@ -183,7 +183,7 @@ export class AppController {
     );
   }
 
-  @Post('users')
+  /*@Post('users')
   @ApiOperation({ summary: 'Crear un nuevo usuario' })
   @ApiBody({
     schema: {
@@ -198,7 +198,7 @@ export class AppController {
   })
   createUser(@Body() data: any) {
     return this.usersService.send('create-user', data);
-  }
+  }*/
 
 
   @Post('auth/register')
@@ -216,6 +216,7 @@ export class AppController {
       },
     },
   })
+
   async registerParticipant(
     @Body()
     data: {
@@ -293,10 +294,37 @@ export class AppController {
   updateUserRoles(
     @Param('id') id: string,
     @Body() data: { roles: string[] },
+    @Req() req: any,
   ) {
     return this.usersService.send('update-user-roles', {
       id: Number(id),
       roles: data.roles,
+      requesterId: req.user.id,
+    });
+  }
+
+  @Patch('users/:id/status')
+  @ApiOperation({ summary: 'Actualizar el estado de un usuario' })
+  @ApiParam({
+    name: 'id',
+    example: 6,
+    description: 'ID del usuario',
+  })
+  @ApiBody({
+    schema: {
+      example: {
+        status: 'INACTIVE',
+      },
+    },
+  })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  updateUserStatus(
+    @Param('id') id: string,
+    @Body() data: { status: 'ACTIVE' | 'INACTIVE' },
+  ) {
+    return this.usersService.send('update-user-status', {
+      id: Number(id),
+      status: data.status,
     });
   }
 
@@ -487,6 +515,7 @@ export class AppController {
       id: Number(id),
     });
   }
+
   @Get('activities/:id/active-enrollments')
   @ApiOperation({
     summary: 'Consultar inscripciones activas de una actividad',
@@ -565,6 +594,84 @@ export class AppController {
     return participants;
   }
 
+  @Get('activities/:id/enrollments')
+  @ApiOperation({
+    summary: 'Consultar todas las inscripciones de una actividad',
+  })
+  @UseGuards(JwtAuthGuard)
+  async findAllEnrollmentsByActivity(
+    @Param('id') id: string,
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const activityId = Number(id);
+    const roles = req.user.roles ?? [];
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      throw new BadRequestException('El ID de la actividad no es válido');
+    }
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede consultar las inscripciones',
+      );
+    }
+
+    const activity = await firstValueFrom(
+      this.activitiesService.send('find-activity', {
+        id: activityId,
+      }),
+    );
+
+    if (!activity) {
+      throw new NotFoundException('La actividad no existe');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(activity.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede consultar sus inscripciones',
+      );
+    }
+
+    const enrollments = await firstValueFrom(
+      this.activitiesService.send('find-all-enrollments-by-activity', {
+        activityId,
+      }),
+    );
+
+    const allEnrollments = Array.isArray(enrollments)
+      ? enrollments
+      : [];
+
+    const participants = await Promise.all(
+      allEnrollments.map(async (enrollment) => {
+        const participant = await firstValueFrom(
+          this.usersService.send('find-user', {
+            userId: Number(enrollment.participantId),
+          }),
+        );
+
+        return {
+          ...enrollment,
+          participant: participant
+            ? {
+                id: participant.id,
+                firstName: participant.firstName,
+                lastName: participant.lastName,
+              }
+            : null,
+        };
+      }),
+    );
+
+    return participants;
+  }
+
   @Post('activities/:id/meetings')
   @ApiOperation({ summary: 'Crear una nueva reunión para una actividad' })
   @ApiParam({
@@ -576,9 +683,7 @@ export class AppController {
     schema: {
       example: {
         dateTime: '2026-09-01T20:00:00.000Z',
-        location: 'Centro Cultural Cipolletti',
-        latitude: -38.9339,
-        longitude: -67.9903,
+        locationId: 1,
         allowedRadius: 100,
       },
     },
@@ -589,9 +694,7 @@ export class AppController {
     @Body()
     data: {
       dateTime: Date;
-      location: string;
-      latitude: number;
-      longitude: number;
+      locationId: number;
       allowedRadius: number;
     },
     @Req() req: { user: { userId: number; roles: string[] } },
@@ -635,10 +738,8 @@ export class AppController {
       this.activitiesService.send('create-meeting', {
         activityId,
         dateTime: data.dateTime,
-        location: data.location,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        allowedRadius: data.allowedRadius,
+        locationId: Number(data.locationId),
+        allowedRadius: Number(data.allowedRadius),
       }),
     );
   }
@@ -655,10 +756,7 @@ export class AppController {
       type: 'object',
       properties: {
         dateTime: { type: 'string', format: 'date-time' },
-        location: { type: 'string' },
-        latitude: { type: 'number', example: -38.924056 },
-        longitude: { type: 'number', example: -67.981111 },
-        allowedRadius: { type: 'number', example: 100 },
+        locationId: { type: 'number', example: 1 },
         status: {
           type: 'string',
           enum: ['SCHEDULED', 'SUSPENDED', 'FINISHED'],
@@ -672,10 +770,7 @@ export class AppController {
     @Body()
     data: {
       dateTime?: Date;
-      location?: string;
-      latitude?: number;
-      longitude?: number;
-      allowedRadius?: number;
+      locationId?: number;
       status?: 'SCHEDULED' | 'SUSPENDED' | 'FINISHED';
     },
     @Req() req: { user: { userId: number; roles: string[] } },
@@ -722,17 +817,8 @@ export class AppController {
         ...(data.dateTime !== undefined && {
           dateTime: data.dateTime,
         }),
-        ...(data.location !== undefined && {
-          location: data.location,
-        }),
-        ...(data.latitude !== undefined && {
-          latitude: Number(data.latitude),
-        }),
-        ...(data.longitude !== undefined && {
-          longitude: Number(data.longitude),
-        }),
-        ...(data.allowedRadius !== undefined && {
-          allowedRadius: Number(data.allowedRadius),
+        ...(data.locationId !== undefined && {
+          locationId: Number(data.locationId),
         }),
         ...(data.status !== undefined && {
           status: data.status,
@@ -793,6 +879,79 @@ export class AppController {
     });
   }
 
+    // UBICACIONES DE ENCUENTROS
+
+  @Get('meeting-locations')
+  @ApiOperation({ summary: 'Consultar ubicaciones disponibles' })
+  @UseGuards(JwtAuthGuard)
+  async findMeetingLocations(
+    @Req() req: { user: { roles: string[] } },
+  ) {
+    const roles = req.user.roles ?? [];
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      !roles.includes('INSTRUCTOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo administradores e instructores pueden consultar ubicaciones',
+      );
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('find-meeting-locations', {}),
+    );
+  }
+
+  @Post('meeting-locations')
+  @ApiOperation({ summary: 'Registrar una ubicación' })
+  @UseGuards(JwtAuthGuard)
+  async createMeetingLocation(
+    @Body()
+    data: {
+      name: string;
+      latitude: number;
+      longitude: number;
+    },
+    @Req() req: { user: { roles: string[] } },
+  ) {
+    if (!req.user.roles?.includes('ADMINISTRADOR')) {
+      throw new ForbiddenException(
+        'Solo un administrador puede registrar ubicaciones',
+      );
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('create-meeting-location', data),
+    );
+  }
+
+  @Patch('meeting-locations/:id/deactivate')
+  @ApiOperation({ summary: 'Desactivar una ubicación' })
+  @UseGuards(JwtAuthGuard)
+  async deactivateMeetingLocation(
+    @Param('id') id: string,
+    @Req() req: { user: { roles: string[] } },
+  ) {
+    if (!req.user.roles?.includes('ADMINISTRADOR')) {
+      throw new ForbiddenException(
+        'Solo un administrador puede desactivar ubicaciones',
+      );
+    }
+
+    const locationId = Number(id);
+
+    if (!Number.isInteger(locationId) || locationId <= 0) {
+      throw new BadRequestException('El ID de la ubicación no es válido');
+    }
+
+    return firstValueFrom(
+      this.activitiesService.send('deactivate-meeting-location', {
+        id: locationId,
+      }),
+    );
+  }
+
   // ASISTENCIA
 
   @Post('attendance/open')
@@ -803,16 +962,7 @@ export class AppController {
       required: ['meetingId', 'startTime', 'endTime'],
       properties: {
         meetingId: { type: 'number', example: 1 },
-        startTime: {
-          type: 'string',
-          format: 'date-time',
-          example: '2026-10-20T15:35:00.000Z',
-        },
-        endTime: {
-          type: 'string',
-          format: 'date-time',
-          example: '2026-10-20T16:05:00.000Z',
-        },
+        
       },
     },
   })
@@ -821,8 +971,6 @@ export class AppController {
     @Body()
     data: {
       meetingId: number;
-      startTime: Date;
-      endTime: Date;
     },
     @Req() req: { user: { userId: number; roles: string[] } },
   ) {
@@ -863,9 +1011,9 @@ export class AppController {
     try {
       return await firstValueFrom(
         this.attendanceService.send('open-attendance', {
-          ...data,
+          meetingId: Number(data.meetingId),
           openedBy: Number(req.user.userId),
-        }),
+        })
       );
     } catch (error) {
       throw error;
@@ -1181,6 +1329,67 @@ export class AppController {
     return this.attendanceService.send('process-absences', {
       sessionId: Number(data.sessionId),
     });
+  }
+
+  @Patch('attendance/manual')
+  @ApiOperation({ summary: 'Modificar asistencia manualmente' })
+  @UseGuards(JwtAuthGuard)
+  async updateManualAttendance(
+    @Body()
+    data: {
+      sessionId: number;
+      participantId: number;
+      status: 'PRESENT' | 'ABSENT';
+    },
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const roles = req.user.roles ?? [];
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede modificar asistencias',
+      );
+    }
+
+    const session = await firstValueFrom(
+      this.attendanceService.send('find-attendance-session', {
+        sessionId: Number(data.sessionId),
+      }),
+    );
+
+    if (!session) {
+      throw new NotFoundException('La sesión de asistencia no existe');
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: Number(session.meetingId),
+      }),
+    );
+
+    if (!meeting) {
+      throw new NotFoundException('El encuentro no existe');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(meeting.activity?.responsibleId) !== Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede modificar asistencias',
+      );
+    }
+
+    return firstValueFrom(
+      this.attendanceService.send('update-manual-attendance', {
+        sessionId: Number(data.sessionId),
+        participantId: Number(data.participantId),
+        status: data.status,
+      }),
+    );
   }
 
   // LOCALIZACION

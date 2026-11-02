@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import * as bcrypt from 'bcrypt';
-import { Role, Prisma } from '@prisma/client';
+import { Role, UserStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
@@ -50,7 +50,7 @@ export class UsersService {
           email: createUserDto.email,
           password: hashedPassword,
           phone: createUserDto.phone,
-          status: 'ACTIVE',
+          status: UserStatus.ACTIVE,
         },
       });
 
@@ -71,6 +71,7 @@ export class UsersService {
       throw error;
     }
   }
+
   async updateProfile(
     id: number,
     profile: UpdateUserProfileDto,
@@ -127,29 +128,162 @@ export class UsersService {
     }
   }
 
-  async updateRoles(id: number, roles: Role[]) {
-    if (!roles.includes(Role.PARTICIPANTE)) {
-      throw new RpcException(
-        'El rol PARTICIPANTE es obligatorio',
-      );
+  async updateRoles(
+    id: number,
+    roles: Role[],
+    requesterId: number,
+  ) {
+    // Validar ID
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El ID del usuario no es válido',
+      });
     }
 
-    const user = await this.prisma.user.update({
+    // Validar roles
+    const validRoles = Object.values(Role);
+
+    if (
+      !Array.isArray(roles) ||
+      !roles.every((role) => validRoles.includes(role))
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Los roles indicados no son válidos',
+      });
+    }
+
+    // El rol PARTICIPANTE es obligatorio
+    if (!roles.includes(Role.PARTICIPANTE)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El rol PARTICIPANTE es obligatorio',
+      });
+    }
+
+    // Buscar usuario que se quiere modificar
+    const currentUser = await this.prisma.user.findUnique({
       where: { id },
-      data: {
-        roles,
+      select: {
+        id: true,
+        roles: true,
       },
     });
 
-    const { password, ...userWithoutPassword } = user;
+    if (!currentUser) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'Usuario no encontrado',
+      });
+    }
 
-    return userWithoutPassword;
+    // Evitar que un administrador se quite su propio rol
+    if (
+      id === requesterId &&
+      !roles.includes(Role.ADMINISTRADOR)
+    ) {
+      throw new RpcException({
+        statusCode: 403,
+        message: 'No podés quitarte tu propio rol de administrador',
+      });
+    }
+
+    // Evitar quitar el rol al último administrador activo
+    if (
+      currentUser.roles.includes(Role.ADMINISTRADOR) &&
+      !roles.includes(Role.ADMINISTRADOR)
+    ) {
+      const activeAdmins = await this.prisma.user.count({
+        where: {
+          status: UserStatus.ACTIVE,
+          roles: {
+            has: Role.ADMINISTRADOR,
+          },
+        },
+      });
+
+      if (activeAdmins <= 1) {
+        throw new RpcException({
+          statusCode: 403,
+          message: 'No se puede quitar el rol al último administrador activo',
+        });
+      }
+    }
+
+    // Actualizar roles
+    try {
+      const user = await this.prisma.user.update({
+        where: { id },
+        data: { roles },
+      });
+
+      const { password, ...userWithoutPassword } = user;
+      return userWithoutPassword;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'El usuario no existe',
+        });
+      }
+
+      throw error;
+    }
+  }
+  
+  async updateStatus(id: number, status: UserStatus) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El ID del usuario no es válido',
+      });
+    }
+
+    const validStatuses = Object.values(UserStatus);
+
+    if (!validStatuses.includes(status)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El estado indicado no es válido',
+      });
+    }
+
+    try {
+      const user = await this.prisma.user.update({
+        where: { id },
+        data: { status },
+      });
+
+      const { password, ...userWithoutPassword } = user;
+
+      return userWithoutPassword;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'El usuario no existe',
+        });
+      }
+
+      throw error;
+    }
   }
 
   async validateCredentials(email: string, password: string) {
     const user = await this.findByEmail(email);
 
     if (!user) {
+      return null;
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
       return null;
     }
 

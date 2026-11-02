@@ -7,6 +7,8 @@ import { CreateActivityDto } from './dto/create-activity.dto';
 import { CreateMeetingDto } from './dto/create-meeting.dto';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 
+const DEFAULT_ALLOWED_RADIUS = 100;
+
 @Injectable()
 export class ActivitiesService {
   constructor(
@@ -252,7 +254,8 @@ export class ActivitiesService {
       data: { status: 'ACTIVE' },
     });
   }
-  async createMeeting(createMeetingDto: CreateMeetingDto) {
+
+ async createMeeting(createMeetingDto: CreateMeetingDto) {
     const activity = await this.prisma.activity.findUnique({
       where: { id: createMeetingDto.activityId },
     });
@@ -271,15 +274,129 @@ export class ActivitiesService {
       });
     }
 
+    const meetingDate = new Date(createMeetingDto.dateTime);
+
+    if (
+      Number.isNaN(meetingDate.getTime()) ||
+      meetingDate <= new Date()
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La fecha y hora del encuentro deben ser futuras',
+      });
+    }
+
+    const meetingLocation = await this.prisma.meetingLocation.findUnique({
+      where: { id: createMeetingDto.locationId },
+    });
+
+    if (!meetingLocation || !meetingLocation.isActive) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La ubicación seleccionada no existe o está inactiva',
+      });
+    }
+
     return this.prisma.meeting.create({
       data: {
         activityId: createMeetingDto.activityId,
         dateTime: createMeetingDto.dateTime,
-        location: createMeetingDto.location,
-        latitude: createMeetingDto.latitude,
-        longitude: createMeetingDto.longitude,
-        allowedRadius: createMeetingDto.allowedRadius,
+        location: meetingLocation.name,
+        latitude: meetingLocation.latitude,
+        longitude: meetingLocation.longitude,
+        locationId: meetingLocation.id,
+        allowedRadius: DEFAULT_ALLOWED_RADIUS,
       },
+    });
+  }
+
+  async createMeetingLocation(data: {
+    name: string;
+    latitude: number;
+    longitude: number;
+  }) {
+    const name = data.name?.trim();
+
+    if (!name) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El nombre de la ubicación es obligatorio',
+      });
+    }
+
+    if (
+      !Number.isFinite(data.latitude) ||
+      data.latitude < -90 ||
+      data.latitude > 90 ||
+      !Number.isFinite(data.longitude) ||
+      data.longitude < -180 ||
+      data.longitude > 180
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Las coordenadas de la ubicación no son válidas',
+      });
+    }
+
+    const existingLocation = await this.prisma.meetingLocation.findUnique({
+      where: { name },
+    });
+
+    if (existingLocation) {
+      if (existingLocation.isActive) {
+        throw new RpcException({
+          statusCode: 409,
+          message: 'Ya existe una ubicación activa con ese nombre',
+        });
+      }
+
+      return this.prisma.meetingLocation.update({
+        where: { id: existingLocation.id },
+        data: {
+          latitude: data.latitude,
+          longitude: data.longitude,
+          isActive: true,
+        },
+      });
+    }
+
+    return this.prisma.meetingLocation.create({
+      data: {
+        name,
+        latitude: data.latitude,
+        longitude: data.longitude,
+      },
+    });
+  }
+  async findMeetingLocations() {
+    return this.prisma.meetingLocation.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async deactivateMeetingLocation(id: number) {
+    const location = await this.prisma.meetingLocation.findUnique({
+      where: { id },
+    });
+
+    if (!location) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La ubicación indicada no existe',
+      });
+    }
+
+    if (!location.isActive) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La ubicación ya está desactivada',
+      });
+    }
+
+    return this.prisma.meetingLocation.update({
+      where: { id },
+      data: { isActive: false },
     });
   }
 
@@ -340,23 +457,40 @@ export class ActivitiesService {
       },
     });
 
-    if (existingEnrollment) {
+      if (existingEnrollment) {
       if (existingEnrollment.status === 'WITHDRAWN') {
+        const activeEnrollments =
+          await this.prisma.enrollment.count({
+            where: {
+              activityId: createEnrollmentDto.activityId,
+              status: 'ACTIVE',
+            },
+          });
+
+        if (activeEnrollments >= activity.capacity) {
+          throw new RpcException({
+            statusCode: 400,
+            message: 'La actividad no tiene cupos disponibles',
+          });
+        }
+
         return this.prisma.enrollment.update({
           where: { id: existingEnrollment.id },
           data: {
             status: 'ACTIVE',
             absenceCount: 0,
+            enrolledAt: new Date(),
           },
         });
       }
 
       throw new RpcException({
         statusCode: 400,
-        message: 'El participante ya está inscripto en esta actividad',
+        message:
+          'El participante ya tiene una inscripción en esta actividad',
       });
     }
-
+    
     const activeEnrollments = await this.prisma.enrollment.count({
       where: {
         activityId: createEnrollmentDto.activityId,
@@ -423,14 +557,10 @@ export class ActivitiesService {
     });
   }
 
-
   async updateMeeting(data: {
     id: number;
     dateTime?: Date;
-    location?: string;
-    latitude?: number;
-    longitude?: number;
-    allowedRadius?: number;
+    locationId?: number;
     status?: 'SCHEDULED' | 'SUSPENDED' | 'FINISHED';
   }) {
     const meeting = await this.prisma.meeting.findUnique({
@@ -443,9 +573,10 @@ export class ActivitiesService {
     if (!meeting) {
       throw new RpcException({
         statusCode: 404,
-        message: 'La reunión no existe',
+        message: 'El encuentro no existe',
       });
     }
+
     if (meeting.activity.status === 'FINISHED') {
       throw new RpcException({
         statusCode: 400,
@@ -454,33 +585,51 @@ export class ActivitiesService {
       });
     }
 
-    const updateData = {
-      ...(data.dateTime !== undefined && {
-        dateTime: data.dateTime,
-      }),
-      ...(data.location !== undefined && {
-        location: data.location,
-      }),
-      ...(data.latitude !== undefined && {
-        latitude: data.latitude,
-      }),
-      ...(data.longitude !== undefined && {
-        longitude: data.longitude,
-      }),
-      ...(data.allowedRadius !== undefined && {
-        allowedRadius: data.allowedRadius,
-      }),
-      ...(data.status !== undefined && {
-        status: data.status,
-      }),
-    };
+    if (
+      data.dateTime !== undefined &&
+      (Number.isNaN(new Date(data.dateTime).getTime()) ||
+        new Date(data.dateTime) <= new Date())
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La fecha y hora del encuentro deben ser futuras',
+      });
+    }
+
+    let meetingLocation;
+
+    if (data.locationId !== undefined) {
+      meetingLocation = await this.prisma.meetingLocation.findUnique({
+        where: { id: data.locationId },
+      });
+
+      if (!meetingLocation || !meetingLocation.isActive) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'La ubicación seleccionada no existe o está inactiva',
+        });
+      }
+    }
 
     return this.prisma.meeting.update({
       where: { id: data.id },
-      data: updateData,
+      data: {
+        ...(data.dateTime !== undefined && {
+          dateTime: new Date(data.dateTime),
+        }),
+        ...(meetingLocation && {
+          location: meetingLocation.name,
+          latitude: meetingLocation.latitude,
+          longitude: meetingLocation.longitude,
+          locationId: meetingLocation.id,
+        }),
+        ...(data.status !== undefined && {
+          status: data.status,
+        }),
+      },
     });
   }
-
+  
   async findEnrollment(activityId: number, participantId: number) {
     return this.prisma.enrollment.findUnique({
       where: {
@@ -497,6 +646,15 @@ export class ActivitiesService {
       where: {
         activityId,
         status: 'ACTIVE',
+      },
+    });
+  }
+
+  async findAllEnrollmentsByActivity(activityId: number) {
+    return this.prisma.enrollment.findMany({
+      where: { activityId },
+      orderBy: {
+        enrolledAt: 'asc',
       },
     });
   }
@@ -518,6 +676,7 @@ export class ActivitiesService {
       },
     });
   }
+
   async registerAbsence(enrollmentId: number, sessionId: number) {
     return this.prisma.$transaction(async (tx) => {
       const enrollment = await tx.enrollment.findUnique({
@@ -562,6 +721,60 @@ export class ActivitiesService {
         data: {
           absenceCount,
           status: absenceCount >= 3 ? 'DROPPED' : 'ACTIVE',
+          dropReason: absenceCount >= 3 ? 'ABSENCES' : null,
+        },
+      });
+    });
+  }
+
+  async removeAbsence(enrollmentId: number, sessionId: number) {
+    return this.prisma.$transaction(async (tx) => {
+      const enrollment = await tx.enrollment.findUnique({
+        where: { id: enrollmentId },
+      });
+
+      if (!enrollment) {
+        throw new RpcException({
+          statusCode: 404,
+          message: 'La inscripción no existe',
+        });
+      }
+
+      const existingAbsence = await tx.processedAbsence.findUnique({
+        where: {
+          enrollmentId_sessionId: {
+            enrollmentId,
+            sessionId,
+          },
+        },
+      });
+
+      if (!existingAbsence) {
+        return enrollment;
+      }
+
+      await tx.processedAbsence.delete({
+        where: {
+          enrollmentId_sessionId: {
+            enrollmentId,
+            sessionId,
+          },
+        },
+      });
+
+      const absenceCount = Math.max(0, enrollment.absenceCount - 1);
+
+      const shouldReactivate =
+        enrollment.status === 'DROPPED' &&
+        enrollment.dropReason === 'ABSENCES' &&
+        absenceCount < 3;
+
+      return tx.enrollment.update({
+        where: { id: enrollmentId },
+        data: {
+          absenceCount,
+          status: shouldReactivate ? 'ACTIVE' : enrollment.status,
+          dropReason: shouldReactivate ? null : enrollment.dropReason,
         },
       });
     });

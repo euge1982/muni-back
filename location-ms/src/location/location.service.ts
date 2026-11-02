@@ -1,30 +1,67 @@
 import { Injectable } from '@nestjs/common';
+import { RpcException } from '@nestjs/microservices';
 
 @Injectable()
 export class LocationService {
   validateLocation(data: {
-    latitude: number;
-    longitude: number;
-    classroomLatitude: number;
-    classroomLongitude: number;
-    allowedRadius: number;
-  }) {
-    const distance = this.calculateDistance(
-      data.latitude,
-      data.longitude,
-      data.classroomLatitude,
-      data.classroomLongitude,
-    );
+  latitude: number;
+  longitude: number;
+  classroomLatitude: number;
+  classroomLongitude: number;
+  allowedRadius: number;
+}) {
+  const coordinates = [
+    data.latitude,
+    data.longitude,
+    data.classroomLatitude,
+    data.classroomLongitude,
+  ];
 
-    return {
-      latitude: data.latitude,
-      longitude: data.longitude,
-      classroomLatitude: data.classroomLatitude,
-      classroomLongitude: data.classroomLongitude,
-      distance,
-      isAllowed: distance <= data.allowedRadius,
-    };
+  if (!coordinates.every(Number.isFinite)) {
+    throw new RpcException({
+      statusCode: 400,
+      message: 'Las coordenadas deben ser números válidos',
+    });
   }
+
+  if (
+    data.latitude < -90 || data.latitude > 90 ||
+    data.classroomLatitude < -90 || data.classroomLatitude > 90 ||
+    data.longitude < -180 || data.longitude > 180 ||
+    data.classroomLongitude < -180 || data.classroomLongitude > 180
+  ) {
+    throw new RpcException({
+      statusCode: 400,
+      message: 'Las coordenadas geográficas están fuera de rango',
+    });
+  }
+
+  if (
+    !Number.isFinite(data.allowedRadius) ||
+    data.allowedRadius <= 0
+  ) {
+    throw new RpcException({
+      statusCode: 400,
+      message: 'El radio permitido debe ser mayor que cero',
+    });
+  }
+
+  const distance = this.calculateDistance(
+    data.latitude,
+    data.longitude,
+    data.classroomLatitude,
+    data.classroomLongitude,
+  );
+
+  return {
+    latitude: data.latitude,
+    longitude: data.longitude,
+    classroomLatitude: data.classroomLatitude,
+    classroomLongitude: data.classroomLongitude,
+    distance,
+    isAllowed: distance <= data.allowedRadius,
+  };
+}
 
   private calculateDistance(
     latitude1: number,
