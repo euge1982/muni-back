@@ -512,4 +512,140 @@ export class AttendanceController {
       }),
     );
   }
+
+  // GENERAR QR DE ASISTENCIA (INSTRUCTOR)
+
+  @Post('attendance/qr/generate')
+  @UseGuards(JwtAuthGuard)
+  async generateAttendanceQr(
+    @Body() data: { sessionId: number },
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    const roles = req.user.roles ?? [];
+
+    if (
+      !roles.includes('INSTRUCTOR') &&
+      !roles.includes('ADMINISTRADOR')
+    ) {
+      throw new ForbiddenException(
+        'Solo un instructor o administrador puede generar el QR',
+      );
+    }
+
+    const session = await firstValueFrom(
+      this.attendanceService.send('find-attendance-session', {
+        sessionId: Number(data.sessionId),
+      }),
+    );
+
+    if (!session) {
+      throw new NotFoundException('La sesión de asistencia no existe');
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: Number(session.meetingId),
+      }),
+    );
+
+    if (!meeting) {
+      throw new NotFoundException('El encuentro no existe');
+    }
+
+    if (
+      !roles.includes('ADMINISTRADOR') &&
+      Number(meeting.activity?.responsibleId) !==
+        Number(req.user.userId)
+    ) {
+      throw new ForbiddenException(
+        'Solo el responsable de la actividad puede generar el QR',
+      );
+    }
+
+    return firstValueFrom(
+      this.attendanceService.send('generate-attendance-qr', {
+        sessionId: Number(data.sessionId),
+      }),
+    );
+  }
+
+  // REGISTRAR ASISTENCIA MEDIANTE QR (PARTICIPANTE)
+
+  @Post('attendance/qr/checkin')
+  @UseGuards(JwtAuthGuard)
+  registerQrAttendance(
+    @Body() data: { token: string },
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    if (!req.user.roles?.includes('PARTICIPANTE')) {
+      throw new ForbiddenException(
+        'Solo los participantes pueden registrar asistencia mediante QR',
+      );
+    }
+
+    if (!data.token?.trim()) {
+      throw new BadRequestException('El token QR es obligatorio');
+    }
+
+    return firstValueFrom(
+      this.attendanceService.send('register-qr-attendance', {
+        token: data.token,
+        participantId: Number(req.user.userId),
+      }),
+    );
+  }
+
+  // CONSULTAR LA ASISTENCIA DEL PARTICIPANTE AUTENTICADO
+
+  @Get('attendance/meeting/:meetingId/my-attendance')
+  @UseGuards(JwtAuthGuard)
+  async findMyAttendanceByMeeting(
+    @Param('meetingId') meetingId: string,
+    @Req() req: { user: { userId: number; roles: string[] } },
+  ) {
+    if (!req.user.roles?.includes('PARTICIPANTE')) {
+      throw new ForbiddenException(
+        'Solo los participantes pueden consultar su propia asistencia',
+      );
+    }
+
+    const id = Number(meetingId);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException(
+        'El ID del encuentro no es válido',
+      );
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', { id }),
+    );
+
+    if (!meeting) {
+      throw new NotFoundException('El encuentro no existe');
+    }
+
+    const session = await firstValueFrom(
+      this.attendanceService.send(
+        'find-attendance-session-by-meeting',
+        { meetingId: id },
+      ),
+    );
+
+    if (!session) {
+      return { registered: false, status: null };
+    }
+
+    const attendance = await firstValueFrom(
+      this.attendanceService.send('find-participant-attendance', {
+        sessionId: Number(session.id),
+        participantId: Number(req.user.userId),
+      }),
+    );
+
+    return {
+      registered: Boolean(attendance),
+      status: attendance?.status ?? null,
+    };
+  }
 }

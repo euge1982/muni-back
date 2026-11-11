@@ -368,6 +368,7 @@ export class ActivitiesService {
       },
     });
   }
+  
   async findMeetingLocations() {
     return this.prisma.meetingLocation.findMany({
       where: { isActive: true },

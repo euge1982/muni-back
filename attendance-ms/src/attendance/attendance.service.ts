@@ -2,6 +2,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
+import { randomBytes } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -9,15 +10,13 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
-
     @Inject('LOCATION_SERVICE')
     private readonly locationService: ClientProxy,
-
     @Inject('ACTIVITIES_SERVICE')
     private readonly activitiesService: ClientProxy,
-  ) { }
+  ) {}
 
- async openAttendance(data: {
+  async openAttendance(data: {
     meetingId: number;
     openedBy: number;
   }) {
@@ -211,8 +210,7 @@ export class AttendanceService {
     if (existingAttendance) {
       throw new RpcException({
         statusCode: 400,
-        message:
-          'El participante ya registró asistencia en esta sesión',
+        message: 'El participante ya registró asistencia en esta sesión',
       });
     }
 
@@ -246,8 +244,7 @@ export class AttendanceService {
     if (!enrollment || enrollment.status !== 'ACTIVE') {
       throw new RpcException({
         statusCode: 400,
-        message:
-          'El participante no está inscripto en esta actividad',
+        message: 'El participante no está inscripto en esta actividad',
       });
     }
 
@@ -303,16 +300,14 @@ export class AttendanceService {
     if (session.status !== 'CLOSED') {
       throw new RpcException({
         statusCode: 400,
-        message:
-          'La sesión debe estar cerrada para procesar las ausencias',
+        message: 'La sesión debe estar cerrada para procesar las ausencias',
       });
     }
 
     if (session.absencesProcessed) {
       throw new RpcException({
         statusCode: 409,
-        message:
-          'Las ausencias de esta sesión ya fueron procesadas',
+        message: 'Las ausencias de esta sesión ya fueron procesadas',
       });
     }
 
@@ -336,8 +331,7 @@ export class AttendanceService {
       });
 
       return {
-        message:
-          'La reunión está suspendida. No se registran ausencias.',
+        message: 'La reunión está suspendida. No se registran ausencias.',
         processed: 0,
         dropped: 0,
       };
@@ -381,8 +375,6 @@ export class AttendanceService {
         continue;
       }
 
-      // Crear primero el registro evita incrementar la ausencia
-      // si ya existe una asistencia para este participante.
       await this.prisma.attendance.create({
         data: {
           sessionId,
@@ -539,7 +531,171 @@ export class AttendanceService {
       );
     }
 
-    return newAttendance;  
+    return newAttendance;
   }
 
+  // Consulta únicamente el registro del participante solicitado en la sesión.
+  async findParticipantAttendance(data: {
+    sessionId: number;
+    participantId: number;
+  }) {
+    return this.prisma.attendance.findUnique({
+      where: {
+        sessionId_participantId: {
+          sessionId: data.sessionId,
+          participantId: data.participantId,
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+  }
+
+  async generateAttendanceQr(sessionId: number) {
+    const session = await this.prisma.attendanceSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'La sesión de asistencia no existe',
+      });
+    }
+
+    const now = new Date();
+
+    if (
+      session.status !== 'OPEN' ||
+      now < session.startTime ||
+      now > session.endTime
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede generar un QR para esta sesión',
+      });
+    }
+
+    if (
+      session.qrToken &&
+      session.qrExpiresAt &&
+      session.qrExpiresAt > now
+    ) {
+      return {
+        sessionId: session.id,
+        token: session.qrToken,
+        expiresAt: session.qrExpiresAt,
+      };
+    }
+
+    const token = randomBytes(32).toString('hex');
+
+    const updatedSession =
+      await this.prisma.attendanceSession.update({
+        where: { id: sessionId },
+        data: {
+          qrToken: token,
+          qrExpiresAt: session.endTime,
+        },
+      });
+
+    return {
+      sessionId: updatedSession.id,
+      token: updatedSession.qrToken,
+      expiresAt: updatedSession.qrExpiresAt,
+    };
+  }
+
+  async registerQrAttendance(data: {
+    token: string;
+    participantId: number;
+  }) {
+    const session = await this.prisma.attendanceSession.findUnique({
+      where: { qrToken: data.token },
+    });
+
+    if (!session) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'El código QR no es válido',
+      });
+    }
+
+    const now = new Date();
+
+    if (
+      !session.qrExpiresAt ||
+      now > session.qrExpiresAt ||
+      now < session.startTime ||
+      now > session.endTime
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El código QR venció',
+      });
+    }
+
+    if (session.status !== 'OPEN') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La sesión de asistencia está cerrada',
+      });
+    }
+
+    const meeting = await firstValueFrom(
+      this.activitiesService.send('find-meeting', {
+        id: session.meetingId,
+      }),
+    );
+
+    if (!meeting || meeting.status === 'SUSPENDED') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'No se puede registrar asistencia en esta reunión',
+      });
+    }
+
+    const enrollment = await firstValueFrom(
+      this.activitiesService.send('find-enrollment', {
+        activityId: meeting.activityId,
+        participantId: data.participantId,
+      }),
+    );
+
+    if (!enrollment || enrollment.status !== 'ACTIVE') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'El participante no tiene una inscripción activa',
+      });
+    }
+
+    const existingAttendance = await this.prisma.attendance.findUnique({
+      where: {
+        sessionId_participantId: {
+          sessionId: session.id,
+          participantId: data.participantId,
+        },
+      },
+    });
+
+    if (existingAttendance) {
+      throw new RpcException({
+        statusCode: 409,
+        message: 'El participante ya registró asistencia en esta sesión',
+      });
+    }
+
+    return this.prisma.attendance.create({
+      data: {
+        sessionId: session.id,
+        participantId: data.participantId,
+        latitude: 0,
+        longitude: 0,
+        checkInTime: now,
+        status: 'PRESENT',
+      },
+    });
+  }
 }

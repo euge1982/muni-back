@@ -1,3 +1,4 @@
+
 import { Controller } from '@nestjs/common';
 import { MessagePattern } from '@nestjs/microservices';
 
@@ -7,7 +8,7 @@ import { AttendanceService } from './attendance.service';
 export class AttendanceController {
   constructor(
     private readonly attendanceService: AttendanceService,
-  ) { }
+  ) {}
 
   @MessagePattern('open-attendance')
   openAttendance(data: {
@@ -44,9 +45,7 @@ export class AttendanceController {
   }
 
   @MessagePattern('attendance-history')
-  attendanceHistory(data: {
-    participantId: number;
-  }) {
+  attendanceHistory(data: { participantId: number }) {
     return this.attendanceService.attendanceHistory(
       data.participantId,
     );
@@ -74,4 +73,27 @@ export class AttendanceController {
     return this.attendanceService.findSessionByMeeting(data.meetingId);
   }
 
+  // Generar u obtener el QR de una sesión
+  @MessagePattern('generate-attendance-qr')
+  generateAttendanceQr(data: { sessionId: number }) {
+    return this.attendanceService.generateAttendanceQr(data.sessionId);
+  }
+
+  // Registrar asistencia mediante el token QR
+  @MessagePattern('register-qr-attendance')
+  registerQrAttendance(data: {
+    token: string;
+    participantId: number;
+  }) {
+    return this.attendanceService.registerQrAttendance(data);
+  }
+
+  // Consultar la asistencia de un participante en una sesión
+  @MessagePattern('find-participant-attendance')
+  findParticipantAttendance(data: {
+    sessionId: number;
+    participantId: number;
+  }) {
+    return this.attendanceService.findParticipantAttendance(data);
+  }
 }
