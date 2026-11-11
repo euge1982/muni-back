@@ -1,12 +1,12 @@
-/*
-  Warnings:
 
-  - The `status` column on the `users` table would be dropped and recreated. This will lead to data loss if there is data in the column.
-
-*/
 -- CreateEnum
 CREATE TYPE "UserStatus" AS ENUM ('ACTIVE', 'INACTIVE');
 
--- AlterTable
-ALTER TABLE "users" DROP COLUMN "status",
-ADD COLUMN     "status" "UserStatus" NOT NULL DEFAULT 'ACTIVE';
+-- Convert existing status values without dropping the column
+ALTER TABLE "users"
+ALTER COLUMN "status" TYPE "UserStatus"
+USING "status"::"UserStatus";
+
+-- Set default status for new users
+ALTER TABLE "users"
+ALTER COLUMN "status" SET DEFAULT 'ACTIVE';
