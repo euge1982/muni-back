@@ -37,7 +37,7 @@ export class ActivitiesController {
 
     @Inject('USERS_SERVICE')
     private readonly usersService: ClientProxy,
-  ) {}
+  ) { }
 
   // ACTIVIDADES
 
@@ -299,10 +299,10 @@ export class ActivitiesController {
           ...enrollment,
           participant: participant
             ? {
-                id: participant.id,
-                firstName: participant.firstName,
-                lastName: participant.lastName,
-              }
+              id: participant.id,
+              firstName: participant.firstName,
+              lastName: participant.lastName,
+            }
             : null,
         };
       }),
@@ -377,10 +377,10 @@ export class ActivitiesController {
           ...enrollment,
           participant: participant
             ? {
-                id: participant.id,
-                firstName: participant.firstName,
-                lastName: participant.lastName,
-              }
+              id: participant.id,
+              firstName: participant.firstName,
+              lastName: participant.lastName,
+            }
             : null,
         };
       }),
@@ -638,6 +638,26 @@ export class ActivitiesController {
 
   @Post('meeting-locations')
   @ApiOperation({ summary: 'Registrar una ubicación' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          example: 'Centro Cultural Cipolletti',
+        },
+        latitude: {
+          type: 'number',
+          example: -38.9339,
+        },
+        longitude: {
+          type: 'number',
+          example: -67.9903,
+        },
+      },
+      required: ['name', 'latitude', 'longitude'],
+    },
+  })
   @UseGuards(JwtAuthGuard)
   async createMeetingLocation(
     @Body()

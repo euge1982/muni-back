@@ -14,7 +14,7 @@ export class AttendanceService {
     private readonly locationService: ClientProxy,
     @Inject('ACTIVITIES_SERVICE')
     private readonly activitiesService: ClientProxy,
-  ) {}
+  ) { }
 
   async openAttendance(data: {
     meetingId: number;
@@ -128,6 +128,7 @@ export class AttendanceService {
     });
   }
 
+
   async closeAttendance(data: { sessionId: number }) {
     const session = await this.prisma.attendanceSession.findUnique({
       where: { id: data.sessionId },
@@ -144,17 +145,13 @@ export class AttendanceService {
       return session;
     }
 
-    if (new Date() < session.endTime) {
-      throw new RpcException({
-        statusCode: 400,
-        message: 'La sesión todavía está abierta',
-      });
-    }
-
-    // El cierre no procesa ausencias.
     return this.prisma.attendanceSession.update({
       where: { id: session.id },
-      data: { status: 'CLOSED' },
+      data: {
+        status: 'CLOSED',
+        qrToken: null,
+        qrExpiresAt: null,
+      },
     });
   }
 
@@ -425,6 +422,13 @@ export class AttendanceService {
       throw new RpcException({
         statusCode: 404,
         message: 'La sesión de asistencia no existe',
+      });
+    }
+
+    if (session.status !== 'OPEN') {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'La sesión de asistencia está cerrada',
       });
     }
 
